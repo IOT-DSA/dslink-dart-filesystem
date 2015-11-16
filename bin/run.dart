@@ -1,6 +1,7 @@
 import "package:dslink/dslink.dart";
 import "package:dslink/nodes.dart";
 
+import "dart:async";
 import "dart:io";
 
 import "package:path/path.dart" as pathlib;
@@ -34,6 +35,12 @@ main(List<String> args) async {
       return false;
     }
 
+    if (parts.last.startsWith("_@")) {
+      var c = new Completer.sync();
+      var pn = (link.provider as ResolvingNodeProvider).getNode(parts.take(parts.length - 1).join("/"), onLoaded: c);
+      await c.future;
+    }
+
     node.attributes["@fileType"] = FS_TYPE_NAMES[stat.type];
 
     if (stat.type == FileSystemEntityType.DIRECTORY) {
@@ -47,6 +54,80 @@ main(List<String> args) async {
           var child = node.children[name] = new SimpleNode(pa);
           child.attributes["@fileType"] = FS_TYPE_NAMES[cstat.type];
         }
+
+        var sub = dir.watch().listen((e) async {
+          var rel = pathlib.relative(e.path, from: dir.path);
+          if (e.type == FileSystemEvent.CREATE) {
+            var x = await getFileSystemEntity(e.path);
+            if (x == null) {
+              var name = NodeNamer.createName(pathlib.basename(e.path));
+              node.children.remove(name);
+              node.updateList(name);
+              link.removeNode("${node.path}/${name}");
+              return;
+            }
+            var cstat = await x.stat();
+            var name = NodeNamer.createName(pathlib.basename(x.path));
+            var pa = NodeNamer.joinWithGoodName(node.path, pathlib.basename(x.path));
+            var child = node.children[name] = new SimpleNode(pa);
+            child.attributes["@fileType"] = FS_TYPE_NAMES[cstat.type];
+            node.updateList(name);
+          } else if (e.type == FileSystemEvent.DELETE) {
+            var name = NodeNamer.createName(pathlib.basename(e.path));
+            node.children.remove(name);
+            node.updateList(name);
+            link.removeNode("${node.path}/${name}");
+          }
+        });
+
+        node.onRemovingCallback = () {
+          if (sub != null) {
+            sub.cancel();
+          }
+        };
+
+        int ops = 0;
+
+        check() {
+          if (ops < 0) {
+            ops = 0;
+          }
+
+          if (ops == 0) {
+            node.provider.removeNode(node.path);
+          }
+        }
+
+        node.onListStartListen = () {
+          ops++;
+        };
+
+        node.onAllListCancelCallback = () {
+          ops--;
+          check();
+        };
+
+        for (CallbackNode c in node.children.values) {
+          c.onListStartListen = () {
+            ops++;
+          };
+
+          c.onAllListCancelCallback = () {
+            ops--;
+            check();
+          };
+
+          c.onSubscribeCallback = () {
+            ops++;
+          };
+
+          c.onUnsubscribeCallback = () {
+            ops--;
+            check();
+          };
+        }
+
+        node.provider.setNode(node.path, node, registerChildren: true);
       } catch (e) {}
     } else if (stat.type == FileSystemEntityType.FILE) {
       var file = new File(filePath);
@@ -135,3 +216,14 @@ Map<FileSystemEntityType, String> FS_TYPE_NAMES = {
 Map<String, String> mounts = {
   "default": "home"
 };
+
+Future<FileSystemEntity> getFileSystemEntity(String path) async {
+  var type = await FileSystemEntity.type(path);
+  if (type == FileSystemEntityType.FILE) {
+    return new File(path);
+  } else if (type == FileSystemEntityType.DIRECTORY) {
+    return new Directory(path);
+  } else {
+    return null;
+  }
+}
