@@ -53,6 +53,7 @@ main(List<String> args) async {
           var pa = NodeNamer.joinWithGoodName(node.path, pathlib.basename(x.path));
           var child = node.children[name] = new SimpleNode(pa);
           child.attributes["@fileType"] = FS_TYPE_NAMES[cstat.type];
+          child.updateList("@fileType");
         }
 
         var sub = dir.watch().listen((e) async {
@@ -131,31 +132,24 @@ main(List<String> args) async {
       } catch (e) {}
     } else if (stat.type == FileSystemEntityType.FILE) {
       var file = new File(filePath);
-      CallbackNode pathNode = node.createChild("_@path", {
+      CallbackNode pathNode = new CallbackNode("${node.path}/_@path");
+      pathNode.configs.addAll({
         r"$name": "Path",
-        r"$type": "string",
-        "?value": filePath
+        r"$type": "string"
       });
 
-      CallbackNode getDataNode = node.createChild("_@getTextContent", {
-        r"$name": "Get Text Content",
-        r"$invokable": "read",
-        r"$params": [],
-        r"$columns": [
-          {
-            "name": "content",
-            "type": "string",
-            "editor": "textarea"
-          }
-        ],
-        r"$result": "values"
+      pathNode.updateValue(filePath);
+
+      CallbackNode textContentNode = new CallbackNode("${node.path}/_@text");
+      textContentNode.configs.addAll({
+        r"$name": "Text",
+        r"$type": "string"
       });
 
-      getDataNode.onActionInvoke = (Map<String, dynamic> params) async {
-        return {
-          "content": await file.readAsString()
-        };
-      };
+      node.children.addAll({
+        "_@path": pathNode,
+        "_@text": textContentNode
+      });
 
       int ops = 0;
 
@@ -188,13 +182,25 @@ main(List<String> args) async {
           check();
         };
 
-        c.onSubscribeCallback = () {
+        c.onSubscribeCallback = () async {
           ops++;
+
+          try {
+            if (c.path.endsWith("/_@text")) {
+              c.updateValue(await file.readAsString());
+            }
+          } catch (e) {}
         };
 
-        c.onUnsubscribeCallback = () {
+        c.onUnsubscribeCallback = () async {
           ops--;
           check();
+
+          try {
+            if (c.path.endsWith("/_@text")) {
+              c.clearValue();
+            }
+          } catch (e) {}
         };
       }
 
@@ -225,5 +231,40 @@ Future<FileSystemEntity> getFileSystemEntity(String path) async {
     return new Directory(path);
   } else {
     return null;
+  }
+}
+
+class CustomResolvingNodeProvider extends ResolvingNodeProvider {
+  CustomResolvingNodeProvider([Map defaultNodes, Map profiles]) :
+        super(defaultNodes, profiles);
+
+  @override
+  SimpleNode addNode(String path, Map m) {
+    if (path == '/' || !path.startsWith('/')) return null;
+
+    Path p = new Path(path);
+    SimpleNode pnode = getNode(p.parentPath);
+
+    SimpleNode node;
+
+    if (pnode != null) {
+      node = pnode.onLoadChild(p.name, m, this);
+    }
+
+    if (node == null) {
+      String profile = m[r'$is'];
+      if (profileMap.containsKey(profile)) {
+        node = profileMap[profile](path);
+      } else {
+        node = new CallbackNode(path);
+      }
+    }
+
+    nodes[path] = node;
+    node.load(m);
+
+    node.onCreated();
+
+    return node;
   }
 }
