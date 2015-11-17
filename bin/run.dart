@@ -7,25 +7,91 @@ import "dart:io";
 import "package:path/path.dart" as pathlib;
 
 LinkProvider link;
+ResolvingNodeProvider provider;
+
+addMountFunction(Map<String, dynamic> params) async {
+  var name = params["name"];
+  var p = params["directory"];
+
+  if (name == null) {
+    throw new Exception("Name for mount was not provided.");
+  }
+
+  var tname = NodeNamer.createName(name);
+
+  if (provider.nodes.containsKey("/${tname}")) {
+    throw new Exception("Mount with name '${name}' already exists.");
+  }
+
+  if (p == null) {
+    throw new Exception("Mount directory was not provided.");
+  }
+
+  var dir = new Directory(p).absolute;
+
+  if (!(await dir.exists())) {
+    await dir.create(recursive: true);
+  }
+
+  var n = provider.nodes["/${tname}"] = new SimpleNode("/${tname}");
+
+  n.configs[r"$name"] = name;
+  n.attributes["@directory"] = dir.path;
+  provider.nodes["/"].addChild(tname, n);
+
+  link.save();
+}
 
 main(List<String> args) async {
-  var np = new ResolvingNodeProvider();
-  link = new LinkProvider(args, "FileSystem-", provider: np, autoInitialize: false);
+  provider = new CustomResolvingNodeProvider();
+  link = new LinkProvider(args, "FileSystem-", provider: provider, autoInitialize: false, profiles: {
+    "addMount": (String path) => new SimpleActionNode(path, (Map<String, dynamic> params) async {
+      var name = params["name"];
+      var p = params["directory"];
 
-  np.handler = (CallbackNode node) async {
-    List<String> parts = node.path.split("/").map(NodeNamer.decodeName).toList();
-
-    if (node.path == "/") {
-      for (var key in mounts.keys) {
-        node.addChild(key, new SimpleNode("/${key}"));
+      if (name == null) {
+        throw new Exception("Name for mount was not provided.");
       }
-      return true;
-    }
+
+      var tname = NodeNamer.createName(name);
+
+      if (provider.nodes.containsKey("/${tname}")) {
+        throw new Exception("Mount with name '${name}' already exists.");
+      }
+
+      if (p == null) {
+        throw new Exception("Mount directory was not provided.");
+      }
+
+      var dir = new Directory(p).absolute;
+
+      if (!(await dir.exists())) {
+        await dir.create(recursive: true);
+      }
+
+      var n = provider.nodes["/${tname}"] = new SimpleNode("/${tname}");
+
+      n.configs[r"$name"] = name;
+      n.attributes["@directory"] = dir.path;
+
+      link.save();
+    })
+  });
+
+  provider.handler = (CallbackNode node) async {
+    List<String> parts = node.path.split("/").map(NodeNamer.decodeName).toList();
 
     String filePath;
 
-    if (mounts.containsKey(parts[1])) {
-      filePath = pathlib.join(mounts[parts[1]], parts.skip(2).join("/"));
+    String mountPath = "/${parts[1]}";
+    SimpleNode mount = provider.nodes.containsKey(mountPath) ? provider.nodes[mountPath] : null;
+
+    if (mount != null && mount.attributes["@directory"] is! String) {
+      mount = null;
+    }
+
+    if (mount != null) {
+      filePath = pathlib.join(mount.attributes["@directory"], parts.skip(2).join("/"));
     } else {
       return false;
     }
@@ -37,7 +103,7 @@ main(List<String> args) async {
 
     if (parts.last.startsWith("_@")) {
       var c = new Completer.sync();
-      var pn = (link.provider as ResolvingNodeProvider).getNode(parts.take(parts.length - 1).join("/"), onLoaded: c);
+      (link.provider as ResolvingNodeProvider).getNode(parts.take(parts.length - 1).join("/"), onLoaded: c);
       await c.future;
     }
 
@@ -210,17 +276,37 @@ main(List<String> args) async {
     return true;
   };
 
+  if (Platform.isWindows) {
+    pathPlaceholder = r"C:\Users\John Smith";
+  } else if (Platform.isMacOS) {
+    pathPlaceholder = "/Users/jsmith";
+  } else {
+    pathPlaceholder = "/home/jsmith";
+  }
+
+  provider.nodes["/"].addChild("_@addMount", new SimpleNode("/_@addMount"));
+
   link.init();
+
+  for (String key in provider.nodes.keys) {
+    SimpleNode value = provider.nodes[key];
+    if (key.indexOf("/") != key.lastIndexOf("/")) {
+      continue;
+    }
+
+    if (value.attributes["@directory"] != null) {
+      provider.nodes["/"].addChild(key.substring(1), value);
+    }
+  }
+
   link.connect();
 }
+
+  String pathPlaceholder;
 
 Map<FileSystemEntityType, String> FS_TYPE_NAMES = {
   FileSystemEntityType.DIRECTORY: "directory",
   FileSystemEntityType.FILE: "file"
-};
-
-Map<String, String> mounts = {
-  "default": "home"
 };
 
 Future<FileSystemEntity> getFileSystemEntity(String path) async {
@@ -266,5 +352,74 @@ class CustomResolvingNodeProvider extends ResolvingNodeProvider {
     node.onCreated();
 
     return node;
+  }
+
+  @override
+  LocalNode getNode(String path, {Completer<CallbackNode> onLoaded, bool forceHandle: false}) {
+    if (path == "" || path == "/") {
+      return nodes["/"];
+    } else if (path.startsWith("/defs/")) {
+      return nodes[path];
+    } else if (path == "/_@addMount") {
+      return new SimpleActionNode(path, addMountFunction)..configs.addAll({
+        r"$name": "Add Mount",
+        r"$is": "addMount",
+        r"$invokable": "write",
+        r"$params": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "directory",
+            "type": "string",
+            "placeholder": pathPlaceholder,
+            "description": "Path to Directory to Mount"
+          }
+        ],
+        r"$result": "values"
+      });
+    } else {
+      return super.getNode(path, onLoaded: onLoaded, forceHandle: forceHandle || path.indexOf("/") == path.lastIndexOf("/"));
+    }
+  }
+
+  @override
+  LocalNode getOrCreateNode(String path, [bool addToTree = true]) {
+    if (path.startsWith("/defs")) {
+      if (nodes.containsKey(path)) {
+        return nodes[path];
+      }
+
+      if (addToTree) {
+        return createNode(path);
+      } else {
+        var node = new SimpleNode(path, this);
+        return node;
+      }
+    } else {
+      return super.getOrCreateNode(path, addToTree);
+    }
+  }
+
+  @override
+  Map save() {
+    var out = {};
+
+    for (String key in nodes.keys) {
+      SimpleNode value = nodes[key];
+      if (key.indexOf("/") != key.lastIndexOf("/")) {
+        continue;
+      }
+
+      if (value.attributes["@directory"] != null) {
+        out[key.substring(1)] = {
+          r"$name": value.configs[r"$name"],
+          "@directory": value.attributes["@directory"]
+        };
+      }
+    }
+
+    return out;
   }
 }
