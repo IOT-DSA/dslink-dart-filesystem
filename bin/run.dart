@@ -212,9 +212,22 @@ main(List<String> args) async {
         r"$type": "string"
       });
 
+      CallbackNode createFileNode = new CallbackNode("${node.path}/_@createFile");
+
       node.children.addAll({
         "_@path": pathNode,
         "_@text": textContentNode
+      });
+
+      createFileNode.configs.addAll({
+        r"$name": "Create File",
+        r"$params": [
+          {
+            "name": "name",
+            "type": "string",
+            "placeholder": "test.txt"
+          }
+        ]
       });
 
       int ops = 0;
