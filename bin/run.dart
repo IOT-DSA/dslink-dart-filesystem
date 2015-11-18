@@ -11,16 +11,40 @@ LinkProvider link;
 SimpleNodeProvider provider;
 
 main(List<String> args) async {
-  link = new LinkProvider(args, "FileSystem-", nodes: {
-    "home": {
-      r"$is": "mount",
-      "@directory": "/Users/alex"
-    }
-  }, profiles: {
-    "mount": (String path) => new MountNode(path)
+  link = new LinkProvider(args, "FileSystem-", profiles: {
+    "mount": (String path) => new MountNode(path),
+    "addMount": (String path) => new AddMountNode(path)
   }, autoInitialize: false);
 
   link.init();
+
+  String pathPlaceholder;
+
+  if (Platform.isWindows) {
+    pathPlaceholder = r"C:\Users\John Smith";
+  } else if (Platform.isMacOS) {
+    pathPlaceholder = "/Users/jsmith";
+  } else {
+    pathPlaceholder = "/home/jsmith";
+  }
+
+  link.addNode("/_@addMount", {
+    r"$name": "Add Mount",
+    r"$invokable": "write",
+    r"$params": [
+      {
+        "name": "name",
+        "type": "string"
+      },
+      {
+        "name": "directory",
+        "type": "string",
+        "placeholder": pathPlaceholder
+      }
+    ],
+    r"$is": "addMount"
+  });
+
   await link.connect();
 
   provider = link.provider;
@@ -56,6 +80,44 @@ main(List<String> args) async {
 
       stdout.write("> ");
     });
+  }
+}
+
+class AddMountNode extends SimpleNode {
+  AddMountNode(String path) : super(path);
+
+  @override
+  onInvoke(Map<String, dynamic> params) async {
+    var name = params["name"];
+    var p = params["directory"];
+
+    if (name == null) {
+      throw new Exception("Name for mount was not provided.");
+    }
+
+    var tname = NodeNamer.createName(name);
+
+    if (provider.nodes.containsKey("/${tname}")) {
+      throw new Exception("Mount with name '${name}' already exists.");
+    }
+
+    if (p == null) {
+      throw new Exception("Mount directory was not provided.");
+    }
+
+    var dir = new Directory(p).absolute;
+
+    if (!(await dir.exists())) {
+      await dir.create(recursive: true);
+    }
+
+    link.addNode("/${tname}", {
+      r"$is": "mount",
+      r"$name": name,
+      "@directory": dir.path
+    });
+
+    link.save();
   }
 }
 
@@ -127,38 +189,54 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
       return;
     }
 
-    if (entity is Directory) {
-      await for (FileSystemEntity child in entity.list()) {
-        String relative = pathlib.relative(child.path, from: entity.path);
-        String name = NodeNamer.createName(relative);
-        FileSystemNode node = new FileSystemNode("${path}/${name}");
-        provider.setNode(node.path, node);
-      }
-
-      if (directoryWatchSub != null) {
-        directoryWatchSub.cancel();
-      }
-
-      directoryWatchSub = entity.watch().listen((FileSystemEvent event) async {
-        if (event.path == filePath) {
-          if (event.type == FileSystemEvent.DELETE) {
-            remove();
-            return;
-          }
-        }
-
-        if (event.type == FileSystemEvent.CREATE) {
-          FileSystemEntity child = await getFileSystemEntity(event.path);
+    try {
+      if (entity is Directory) {
+        await for (FileSystemEntity child in entity.list()) {
           String relative = pathlib.relative(child.path, from: entity.path);
           String name = NodeNamer.createName(relative);
           FileSystemNode node = new FileSystemNode("${path}/${name}");
           provider.setNode(node.path, node);
-        } else if (event.type == FileSystemEvent.DELETE) {
-          String relative = pathlib.relative(event.path, from: entity.path);
-          String name = NodeNamer.createName(relative);
-          provider.removeNode("${path}/${name}");
         }
-      });
+
+        if (directoryWatchSub != null) {
+          directoryWatchSub.cancel();
+        }
+
+        directoryWatchSub = entity.watch().listen((FileSystemEvent event) async {
+          if (event.path == filePath) {
+            if (event.type == FileSystemEvent.DELETE) {
+              remove();
+              return;
+            }
+          }
+
+          if (event.type == FileSystemEvent.CREATE) {
+            FileSystemEntity child = await getFileSystemEntity(event.path);
+            String relative = pathlib.relative(child.path, from: entity.path);
+            String name = NodeNamer.createName(relative);
+            FileSystemNode node = new FileSystemNode("${path}/${name}");
+            provider.setNode(node.path, node);
+          } else if (event.type == FileSystemEvent.DELETE) {
+            String relative = pathlib.relative(event.path, from: entity.path);
+            String name = NodeNamer.createName(relative);
+            provider.removeNode("${path}/${name}");
+          }
+        });
+      }
+    } catch (e) {
+      var err = e;
+      if (!children.containsKey("error")) {
+        link.addNode("${path}/error", {
+          r"$name": "Error",
+          r"$type": "string"
+        });
+      }
+
+      if (err is FileSystemException) {
+        err = err.message + " (path: ${err.path})${err.osError != null ? ' (OS error: ${err.osError})' : ''}";
+      }
+
+      (children["error"] as SimpleNode).updateValue(err.toString());
     }
 
     isPopulated = true;
