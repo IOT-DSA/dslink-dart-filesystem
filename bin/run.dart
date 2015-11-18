@@ -267,10 +267,12 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
 
           if (event.type == FileSystemEvent.CREATE) {
             FileSystemEntity child = await getFileSystemEntity(event.path);
-            String relative = pathlib.relative(child.path, from: entity.path);
-            String name = NodeNamer.createName(relative);
-            FileSystemNode node = new FileSystemNode("${path}/${name}");
-            provider.setNode(node.path, node);
+            if (child != null) {
+              String relative = pathlib.relative(child.path, from: entity.path);
+              String name = NodeNamer.createName(relative);
+              FileSystemNode node = new FileSystemNode("${path}/${name}");
+              provider.setNode(node.path, node);
+            }
           } else if (event.type == FileSystemEvent.DELETE) {
             String relative = pathlib.relative(event.path, from: entity.path);
             String name = NodeNamer.createName(relative);
@@ -428,7 +430,11 @@ class FileContentNode extends SimpleNode implements Collectable, WaitForMe {
 
   @override
   void collect() {
-    if (calculateReferences() == 0) {
+    int allReferenceCounts = parent is Collectable ?
+      (parent as Collectable).calculateReferences(false) :
+      calculateReferences();
+
+    if (allReferenceCounts == 0) {
       remove();
     }
   }
