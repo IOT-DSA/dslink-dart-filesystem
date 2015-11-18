@@ -11,17 +11,20 @@ LinkProvider link;
 SimpleNodeProvider provider;
 
 main(List<String> args) async {
-  link = new LinkProvider(args, "FileSystem-", profiles: {
+  link = new LinkProvider(args, "FileSystem-", provider: provider, autoInitialize: false, profiles: {
     "mount": (String path) => new MountNode(path),
     "addMount": (String path) => new AddMountNode(path),
     "remove": (String path) => new DeleteActionNode.forParent(path, provider, onDelete: () {
       link.save();
-    })
-  }, autoInitialize: false);
+    }),
+    "fileContent": (String path) => new FileContentNode(path)
+  });
 
   link.init();
 
   String pathPlaceholder;
+
+  provider = link.provider;
 
   if (Platform.isWindows) {
     pathPlaceholder = r"C:\Users\John Smith";
@@ -186,6 +189,7 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
   Path p;
   MountNode mount;
   String filePath;
+  FileSystemEntity entity;
 
   FileSystemNode(String path) : super(path) {
     p = new Path(path);
@@ -206,7 +210,7 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
 
     filePath = mount.resolveChildFilePath(path);
 
-    FileSystemEntity entity = await getFileSystemEntity(filePath);
+    entity = await getFileSystemEntity(filePath);
 
     if (entity == null) {
       remove();
@@ -220,18 +224,18 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
 
     try {
       if (entity is Directory) {
-        await for (FileSystemEntity child in entity.list()) {
+        await for (FileSystemEntity child in (entity as Directory).list()) {
           String relative = pathlib.relative(child.path, from: entity.path);
           String name = NodeNamer.createName(relative);
           FileSystemNode node = new FileSystemNode("${path}/${name}");
           provider.setNode(node.path, node);
         }
 
-        if (directoryWatchSub != null) {
-          directoryWatchSub.cancel();
+        if (fileWatchSub != null) {
+          fileWatchSub.cancel();
         }
 
-        directoryWatchSub = entity.watch().listen((FileSystemEvent event) async {
+        fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
           if (event.path == filePath) {
             if (event.type == FileSystemEvent.DELETE) {
               remove();
@@ -251,11 +255,24 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
             provider.removeNode("${path}/${name}");
           }
         });
+      } else if (entity is File) {
+        fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
+         if (event.type == FileSystemEvent.DELETE) {
+           remove();
+           return;
+         }
+        });
+
+        link.addNode("${path}/_@content", {
+          r"$is": "fileContent",
+          r"$name": "Content",
+          r"$type": "string"
+        });
       }
     } catch (e) {
       var err = e;
-      if (!children.containsKey("error")) {
-        link.addNode("${path}/error", {
+      if (!children.containsKey("_@error")) {
+        link.addNode("${path}/_@error", {
           r"$name": "Error",
           r"$type": "string"
         });
@@ -265,14 +282,14 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
         err = err.message + " (path: ${err.path})${err.osError != null ? ' (OS error: ${err.osError})' : ''}";
       }
 
-      (children["error"] as SimpleNode).updateValue(err.toString());
+      (children["_@error"] as SimpleNode).updateValue(err.toString());
     }
 
     isPopulated = true;
   }
 
   bool isPopulated = false;
-  StreamSubscription directoryWatchSub;
+  StreamSubscription fileWatchSub;
 
   @override
   Future get onLoaded {
@@ -361,9 +378,78 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
   @override
   onRemoving() {
     super.onRemoving();
-    if (directoryWatchSub != null) {
-      directoryWatchSub.cancel();
+    if (fileWatchSub != null) {
+      fileWatchSub.cancel();
     }
+  }
+}
+
+class FileContentNode extends SimpleNode implements Collectable {
+  FileSystemNode fileNode;
+
+  FileContentNode(String path) : super(path);
+
+  @override
+  onCreated() {
+    fileNode = link.getNode(new Path(path).parentPath);
+
+    if (fileNode == null) {
+      remove();
+      return;
+    }
+  }
+
+  @override
+  int calculateReferences([bool includeChildren = true]) {
+    return referenceCount;
+  }
+
+  @override
+  void collect() {
+    if (calculateReferences() == 0) {
+      remove();
+    }
+  }
+
+  @override
+  void collectChildren() {
+  }
+
+  @override
+  onSubscribe() {
+    referenceCount++;
+    loadValue();
+  }
+
+  loadValue() async {
+    if (isLoadingValue) {
+      await new Future.delayed(const Duration(milliseconds: 25), loadValue);
+      return;
+    }
+
+    isLoadingValue = true;
+
+    try {
+      updateValue(await (fileNode.entity as File).readAsString());
+    } catch (e) {
+    }
+    isLoadingValue = false;
+  }
+
+  bool isLoadingValue = false;
+
+  @override
+  onUnsubscribe() {
+    referenceCount--;
+    collect();
+  }
+
+  int referenceCount = 0;
+
+  @override
+  onRemoving() {
+    super.onRemoving();
+    clearValue();
   }
 }
 
