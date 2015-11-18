@@ -17,7 +17,8 @@ main(List<String> args) async {
     "remove": (String path) => new DeleteActionNode.forParent(path, provider, onDelete: () {
       link.save();
     }),
-    "fileContent": (String path) => new FileContentNode(path)
+    "fileContent": (String path) => new FileContentNode(path),
+    "fileModified": (String path) => new FileLastModifiedNode(path)
   });
 
   link.init();
@@ -65,6 +66,10 @@ main(List<String> args) async {
 
     String name = parts.last;
     if (name == "_@content") {
+      var node = new FileContentNode(path);
+      provider.setNode(path, node);
+      return node;
+    } else if (name == "_@modified") {
       var node = new FileContentNode(path);
       provider.setNode(path, node);
       return node;
@@ -281,15 +286,24 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
         });
       } else if (entity is File) {
         fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
-         if (event.type == FileSystemEvent.DELETE) {
-           remove();
-           return;
-         }
+          if (event.type == FileSystemEvent.DELETE) {
+            remove();
+            return;
+          } else if (event.type == FileSystemEvent.MODIFY) {
+            await (children["_@content"] as FileContentNode).loadValue();
+            await (children["_@modified"] as FileLastModifiedNode).loadValue();
+          }
         });
 
         link.addNode("${path}/_@content", {
           r"$is": "fileContent",
           r"$name": "Content",
+          r"$type": "string"
+        });
+
+        link.addNode("${path}/_@modified", {
+          r"$is": "fileModified",
+          r"$name": "Last Modified",
           r"$type": "string"
         });
       }
@@ -404,6 +418,89 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
     super.onRemoving();
     if (fileWatchSub != null) {
       fileWatchSub.cancel();
+    }
+  }
+}
+
+class FileLastModifiedNode extends SimpleNode implements Collectable, WaitForMe {
+  FileSystemNode fileNode;
+
+  FileLastModifiedNode(String path) : super(path);
+
+  @override
+  onCreated() {
+    fileNode = link.getNode(new Path(path).parentPath);
+
+    if (fileNode is! FileSystemNode) {
+      remove();
+      return;
+    }
+  }
+
+  @override
+  int calculateReferences([bool includeChildren = true]) {
+    return referenceCount;
+  }
+
+  @override
+  void collect() {
+    int allReferenceCounts = parent is Collectable ?
+      (parent as Collectable).calculateReferences(false) :
+      calculateReferences();
+
+    if (allReferenceCounts == 0) {
+      remove();
+    }
+  }
+
+  @override
+  void collectChildren() {
+  }
+
+  @override
+  onSubscribe() {
+    super.onSubscribe();
+    referenceCount++;
+    loadValue();
+  }
+
+  loadValue() async {
+    if (isLoadingValue) {
+      await new Future.delayed(const Duration(milliseconds: 25), loadValue);
+      return;
+    }
+
+    isLoadingValue = true;
+
+    try {
+      updateValue((await (fileNode.entity as File).lastModified()).toString());
+    } catch (e) {
+    }
+    isLoadingValue = false;
+  }
+
+  bool isLoadingValue = false;
+
+  @override
+  onUnsubscribe() {
+    referenceCount--;
+    collect();
+  }
+
+  int referenceCount = 0;
+
+  @override
+  onRemoving() {
+    super.onRemoving();
+    clearValue();
+  }
+
+  @override
+  Future get onLoaded {
+    if (!fileNode.isPopulated) {
+      return fileNode.populate();
+    } else {
+      return new Future.value();
     }
   }
 }
