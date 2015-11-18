@@ -22,9 +22,9 @@ main(List<String> args) async {
 
   link.init();
 
-  String pathPlaceholder;
-
   provider = link.provider;
+
+  String pathPlaceholder;
 
   if (Platform.isWindows) {
     pathPlaceholder = r"C:\Users\John Smith";
@@ -51,9 +51,31 @@ main(List<String> args) async {
     r"$is": "addMount"
   });
 
-  await link.connect();
+  provider.registerResolver((String path) {
+    List<String> parts = path.split("/");
+    if (parts.length < 3) {
+      return null;
+    }
 
-  provider = link.provider;
+    String basePath = parts.take(2).join("/");
+
+    if (provider.nodes[basePath] is! MountNode) {
+      return null;
+    }
+
+    String name = parts.last;
+    if (name == "_@content") {
+      var node = new FileContentNode(path);
+      provider.setNode(path, node);
+      return node;
+    } else {
+      var node = new FileSystemNode(path);
+      provider.setNode(path, node);
+      return node;
+    }
+  });
+
+  await link.connect();
 
   if (const bool.fromEnvironment("debugger", defaultValue: false)) {
     stdout.write("> ");
@@ -384,7 +406,7 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
   }
 }
 
-class FileContentNode extends SimpleNode implements Collectable {
+class FileContentNode extends SimpleNode implements Collectable, WaitForMe {
   FileSystemNode fileNode;
 
   FileContentNode(String path) : super(path);
@@ -393,7 +415,7 @@ class FileContentNode extends SimpleNode implements Collectable {
   onCreated() {
     fileNode = link.getNode(new Path(path).parentPath);
 
-    if (fileNode == null) {
+    if (fileNode is! FileSystemNode) {
       remove();
       return;
     }
@@ -417,6 +439,7 @@ class FileContentNode extends SimpleNode implements Collectable {
 
   @override
   onSubscribe() {
+    super.onSubscribe();
     referenceCount++;
     loadValue();
   }
@@ -450,6 +473,15 @@ class FileContentNode extends SimpleNode implements Collectable {
   onRemoving() {
     super.onRemoving();
     clearValue();
+  }
+
+  @override
+  Future get onLoaded {
+    if (!fileNode.isPopulated) {
+      return fileNode.populate();
+    } else {
+      return new Future.value();
+    }
   }
 }
 
