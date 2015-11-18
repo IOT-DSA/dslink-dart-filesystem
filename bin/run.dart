@@ -13,7 +13,10 @@ SimpleNodeProvider provider;
 main(List<String> args) async {
   link = new LinkProvider(args, "FileSystem-", profiles: {
     "mount": (String path) => new MountNode(path),
-    "addMount": (String path) => new AddMountNode(path)
+    "addMount": (String path) => new AddMountNode(path),
+    "remove": (String path) => new DeleteActionNode.forParent(path, provider, onDelete: () {
+      link.save();
+    })
   }, autoInitialize: false);
 
   link.init();
@@ -126,6 +129,17 @@ class MountNode extends FileSystemNode {
 
   MountNode(String path) : super(path);
 
+  @override
+  onCreated() {
+    super.onCreated();
+
+    link.addNode("${path}/_@unmount", {
+      r"$name": "Unmount",
+      r"$is": "remove",
+      r"$invokable": "write"
+    });
+  }
+
   String resolveChildFilePath(String childPath) {
     var relative = childPath.split("/").skip(2).map(NodeNamer.decodeName).join("/");
     return pathlib.join(directory, relative);
@@ -144,6 +158,21 @@ class MountNode extends FileSystemNode {
         provider.removeNode(key);
       }
     }
+  }
+
+  @override
+  Map save() {
+    return {
+      r"$is": "mount",
+      r"$name": configs[r"$name"],
+      "@directory": attributes["@directory"]
+    };
+  }
+
+  @override
+  onRemoving() {
+    super.onRemoving();
+    findStrayNodesAndCollect();
   }
 }
 
@@ -327,6 +356,14 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
       }
     }
     isPopulated = false;
+  }
+
+  @override
+  onRemoving() {
+    super.onRemoving();
+    if (directoryWatchSub != null) {
+      directoryWatchSub.cancel();
+    }
   }
 }
 
