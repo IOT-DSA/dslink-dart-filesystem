@@ -18,7 +18,8 @@ main(List<String> args) async {
       link.save();
     }),
     "fileContent": (String path) => new FileContentNode(path),
-    "fileModified": (String path) => new FileLastModifiedNode(path)
+    "fileModified": (String path) => new FileLastModifiedNode(path),
+    "directoryMakeDirectory": (String path) => new DirectoryMakeDirectoryNode(path)
   });
 
   link.init();
@@ -65,18 +66,22 @@ main(List<String> args) async {
     }
 
     String name = parts.last;
+    SimpleNode node;
     if (name == "_@content") {
-      var node = new FileContentNode(path);
-      provider.setNode(path, node);
-      return node;
+      node = new FileContentNode(path);
     } else if (name == "_@modified") {
-      var node = new FileContentNode(path);
+      node = new FileContentNode(path);
+    } else if (name == "_@mkdir") {
+      node = new DirectoryMakeDirectoryNode(path);
+    } else {
+      node = new FileSystemNode(path);
+    }
+
+    if (node != null) {
       provider.setNode(path, node);
       return node;
     } else {
-      var node = new FileSystemNode(path);
-      provider.setNode(path, node);
-      return node;
+      return null;
     }
   });
 
@@ -283,6 +288,10 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
             String name = NodeNamer.createName(relative);
             provider.removeNode("${path}/${name}");
           }
+        });
+
+        link.addNode("${path}/_@mkdir", {
+          r"$is": "directoryMakeDirectory"
         });
       } else if (entity is File) {
         fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
@@ -576,6 +585,96 @@ class FileContentNode extends SimpleNode implements Collectable, WaitForMe {
   onRemoving() {
     super.onRemoving();
     clearValue();
+  }
+
+  @override
+  Future get onLoaded {
+    if (!fileNode.isPopulated) {
+      return fileNode.populate();
+    } else {
+      return new Future.value();
+    }
+  }
+}
+
+class DirectoryMakeDirectoryNode extends SimpleNode implements Collectable, WaitForMe {
+  FileSystemNode fileNode;
+
+  DirectoryMakeDirectoryNode(String path) : super(path) {
+    configs[r"$name"] = "Make Directory";
+    configs[r"$invokable"] = "write";
+    configs[r"$params"] = [
+      {
+        "name": "name",
+        "type": "string",
+        "placeholder": "MyDir"
+      }
+    ];
+  }
+
+  @override
+  onCreated() {
+    fileNode = link.getNode(new Path(path).parentPath);
+
+    if (fileNode is! FileSystemNode) {
+      remove();
+      return;
+    }
+  }
+
+  @override
+  int calculateReferences([bool includeChildren = true]) {
+    return referenceCount;
+  }
+
+  @override
+  void collect() {
+    int allReferenceCounts = parent is Collectable ?
+      (parent as Collectable).calculateReferences(false) :
+      calculateReferences();
+
+    if (allReferenceCounts == 0) {
+      remove();
+    }
+  }
+
+  @override
+  void collectChildren() {
+  }
+
+  @override
+  onStartListListen() {
+    referenceCount++;
+  }
+
+  @override
+  onAllListCancel() {
+    referenceCount--;
+    collect();
+  }
+
+  @override
+  onInvoke(Map<String, dynamic> params) async {
+    String name = params["name"];
+    if (name == null || name.isEmpty) {
+      throw new Exception("Directory name not provided.");
+    }
+
+    Directory entity = fileNode.entity;
+    Directory created = new Directory(pathlib.join(entity.path, name));
+
+    if (await created.exists()) {
+      throw new Exception("Directory '${name}' already exists.");
+    }
+
+    await created.create(recursive: true);
+  }
+
+  int referenceCount = 0;
+
+  @override
+  onRemoving() {
+    super.onRemoving();
   }
 
   @override
