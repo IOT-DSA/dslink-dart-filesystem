@@ -19,7 +19,8 @@ main(List<String> args) async {
     }),
     "fileContent": (String path) => new FileContentNode(path),
     "fileModified": (String path) => new FileLastModifiedNode(path),
-    "directoryMakeDirectory": (String path) => new DirectoryMakeDirectoryNode(path)
+    "directoryMakeDirectory": (String path) => new DirectoryMakeDirectoryNode(path),
+    "fileDelete": (String path) => new FileDeleteNode(path)
   });
 
   link.init();
@@ -73,6 +74,8 @@ main(List<String> args) async {
       node = new FileContentNode(path);
     } else if (name == "_@mkdir") {
       node = new DirectoryMakeDirectoryNode(path);
+    } else if (name == "_@delete") {
+      node = new FileDeleteNode(path);
     } else {
       node = new FileSystemNode(path);
     }
@@ -316,6 +319,10 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
           r"$type": "string"
         });
       }
+
+      link.addNode("${path}/_@delete", {
+        r"$is": "fileDelete"
+      });
     } catch (e) {
       var err = e;
       if (!children.containsKey("_@error")) {
@@ -329,7 +336,9 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
         err = err.message + " (path: ${err.path})${err.osError != null ? ' (OS error: ${err.osError})' : ''}";
       }
 
-      (children["_@error"] as SimpleNode).updateValue(err.toString());
+      if (children["_@error"] != null) {
+        (children["_@error"] as SimpleNode).updateValue(err.toString());
+      }
     }
 
     isPopulated = true;
@@ -668,6 +677,77 @@ class DirectoryMakeDirectoryNode extends SimpleNode implements Collectable, Wait
     }
 
     await created.create(recursive: true);
+  }
+
+  int referenceCount = 0;
+
+  @override
+  onRemoving() {
+    super.onRemoving();
+  }
+
+  @override
+  Future get onLoaded {
+    if (!fileNode.isPopulated) {
+      return fileNode.populate();
+    } else {
+      return new Future.value();
+    }
+  }
+}
+
+class FileDeleteNode extends SimpleNode implements Collectable, WaitForMe {
+  FileSystemNode fileNode;
+
+  FileDeleteNode(String path) : super(path) {
+    configs[r"$name"] = "Delete";
+    configs[r"$invokable"] = "write";
+  }
+
+  @override
+  onCreated() {
+    fileNode = link.getNode(new Path(path).parentPath);
+
+    if (fileNode is! FileSystemNode) {
+      remove();
+      return;
+    }
+  }
+
+  @override
+  int calculateReferences([bool includeChildren = true]) {
+    return referenceCount;
+  }
+
+  @override
+  void collect() {
+    int allReferenceCounts = parent is Collectable ?
+    (parent as Collectable).calculateReferences(false) :
+    calculateReferences();
+
+    if (allReferenceCounts == 0) {
+      remove();
+    }
+  }
+
+  @override
+  void collectChildren() {
+  }
+
+  @override
+  onStartListListen() {
+    referenceCount++;
+  }
+
+  @override
+  onAllListCancel() {
+    referenceCount--;
+    collect();
+  }
+
+  @override
+  onInvoke(Map<String, dynamic> params) async {
+    await fileNode.entity.delete(recursive: true);
   }
 
   int referenceCount = 0;
