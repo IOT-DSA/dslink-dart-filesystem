@@ -10,6 +10,12 @@ import "package:path/path.dart" as pathlib;
 LinkProvider link;
 SimpleNodeProvider provider;
 
+enum ReferenceType {
+  LIST,
+  SUBSCRIBE,
+  MOUNT
+}
+
 main(List<String> args) async {
   link = new LinkProvider(args, "FileSystem-", provider: provider, autoInitialize: false, profiles: {
     "mount": (String path) => new MountNode(path),
@@ -71,7 +77,7 @@ main(List<String> args) async {
     if (name == "_@content") {
       node = new FileContentNode(path);
     } else if (name == "_@modified") {
-      node = new FileContentNode(path);
+      node = new FileLastModifiedNode(path);
     } else if (name == "_@mkdir") {
       node = new DirectoryMakeDirectoryNode(path);
     } else if (name == "_@delete") {
@@ -106,14 +112,34 @@ main(List<String> args) async {
         }
       } else if (line == "total-references") {
         int total = 0;
-        for (LocalNode node in provider.getNode("/").children.values) {
+        for (LocalNode node in provider
+            .getNode("/")
+            .children
+            .values) {
           if (node is Collectable) {
             total += (node as Collectable).calculateReferences();
           }
         }
         print("${total} total references");
+      } else if (line == "trace-references") {
+        for (String key in provider.nodes.keys) {
+          LocalNode node = provider.nodes[key];
+          if (node is ReferencedNode) {
+            print("${node.path}: ${node.references.map((x) => x
+                .toString()
+                .split(".")
+                .last).toList()}");
+          }
+        }
+      } else if (line == "node-types") {
+        for (String key in provider.nodes.keys) {
+          LocalNode node = provider.nodes[key];
+          if (node is ReferencedNode) {
+            print("${node.path}: ${node.runtimeType}");
+          }
+        }
       } else if (line == "help") {
-        print("Commands: show-live-nodes, show-counts, total-references");
+        print("Commands: show-live-nodes, node-types, show-counts, total-references, trace-references");
       } else if (line == "") {
       } else {
         print("Unknown Command: ${line}");
@@ -165,7 +191,9 @@ class AddMountNode extends SimpleNode {
 class MountNode extends FileSystemNode {
   String get directory => attributes["@directory"];
 
-  MountNode(String path) : super(path);
+  MountNode(String path) : super(path) {
+    references.add(ReferenceType.MOUNT);
+  }
 
   @override
   onCreated() {
@@ -184,7 +212,7 @@ class MountNode extends FileSystemNode {
   }
 
   @override
-  void doNodeCollection() { // Don't collect the mount nodes.
+  void collect() { // Don't collect the mount nodes.
     collectChildren();
     findStrayNodesAndCollect();
   }
@@ -192,7 +220,7 @@ class MountNode extends FileSystemNode {
   void findStrayNodesAndCollect() {
     String base = path + "/";
     for (String key in provider.nodes.keys.toList()) {
-      if (key.startsWith(base)) {
+      if (key.startsWith(base) && !key.endsWith("/_@unmount")) {
         provider.removeNode(key);
       }
     }
@@ -220,7 +248,62 @@ abstract class Collectable {
   int calculateReferences([bool includeChildren = true]);
 }
 
-class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
+abstract class ValueExpendable {
+  loadValue();
+}
+
+abstract class ReferencedNode extends SimpleNode implements Collectable {
+  ReferencedNode(String path) : super(path);
+
+  @override
+  int calculateReferences([bool includeChildren = true]) {
+    int total = references.length;
+
+    if (includeChildren) {
+      for (LocalNode node in children.values) {
+        if (node is Collectable) {
+          total += (node as Collectable).calculateReferences();
+        }
+      }
+    }
+
+    return total;
+  }
+
+  @override
+  onStartListListen() {
+    references.add(ReferenceType.LIST);
+  }
+
+  @override
+  onAllListCancel() {
+    references.removeWhere((x) => x == ReferenceType.LIST);
+    collect();
+  }
+
+  @override
+  onSubscribe() {
+    if (!references.contains(ReferenceType.SUBSCRIBE) && this is ValueExpendable) {
+      (this as ValueExpendable).loadValue();
+    }
+
+    references.add(ReferenceType.SUBSCRIBE);
+  }
+
+  @override
+  onUnsubscribe() {
+    references.remove(ReferenceType.SUBSCRIBE);
+    collect();
+
+    if (!references.contains(ReferenceType.SUBSCRIBE)) {
+      clearValue();
+    }
+  }
+
+  List<ReferenceType> references = [];
+}
+
+class FileSystemNode extends ReferencedNode implements WaitForMe {
   Path p;
   MountNode mount;
   String filePath;
@@ -321,7 +404,14 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
       }
 
       link.addNode("${path}/_@delete", {
-        r"$is": "fileDelete"
+        r"$is": "fileDelete",
+        r"$params": [
+          {
+            "name": "areYouSure",
+            "type": "bool",
+            "default": false
+          }
+        ]
       });
     } catch (e) {
       var err = e;
@@ -356,21 +446,6 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
   }
 
   @override
-  int calculateReferences([bool includeChildren = true]) {
-    int total = referenceCount;
-
-    if (includeChildren) {
-      for (LocalNode node in children.values) {
-        if (node is Collectable) {
-          total += (node as Collectable).calculateReferences();
-        }
-      }
-    }
-
-    return total;
-  }
-
-  @override
   void collect() {
     if (const bool.fromEnvironment("verbose.collect", defaultValue: false)) {
       print("[Node Collector] collect() called on ${path}");
@@ -379,8 +454,8 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
     LocalNode parent = provider.getNode(p.parentPath);
 
     int allReferenceCounts = parent is Collectable ?
-      (parent as Collectable).calculateReferences(false) :
-      calculateReferences();
+    (parent as Collectable).calculateReferences(false) :
+    calculateReferences();
 
     if (allReferenceCounts == 0) {
       if (const bool.fromEnvironment("verbose.collect", defaultValue: false)) {
@@ -391,34 +466,6 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
       remove();
       return;
     }
-  }
-
-  void doNodeCollection() {
-    collect();
-  }
-
-  int referenceCount = 0;
-
-  @override
-  onStartListListen() {
-    referenceCount++;
-  }
-
-  @override
-  onAllListCancel() {
-    referenceCount--;
-    doNodeCollection();
-  }
-
-  @override
-  onSubscribe() {
-    referenceCount++;
-  }
-
-  @override
-  onUnsubscribe() {
-    referenceCount--;
-    doNodeCollection();
   }
 
   @override
@@ -440,7 +487,7 @@ class FileSystemNode extends SimpleNode implements WaitForMe, Collectable {
   }
 }
 
-class FileLastModifiedNode extends SimpleNode implements Collectable, WaitForMe {
+class FileLastModifiedNode extends ReferencedNode implements WaitForMe, ValueExpendable {
   FileSystemNode fileNode;
 
   FileLastModifiedNode(String path) : super(path);
@@ -456,15 +503,10 @@ class FileLastModifiedNode extends SimpleNode implements Collectable, WaitForMe 
   }
 
   @override
-  int calculateReferences([bool includeChildren = true]) {
-    return referenceCount;
-  }
-
-  @override
   void collect() {
     int allReferenceCounts = parent is Collectable ?
-      (parent as Collectable).calculateReferences(false) :
-      calculateReferences();
+    (parent as Collectable).calculateReferences(false) :
+    calculateReferences();
 
     if (allReferenceCounts == 0) {
       remove();
@@ -473,13 +515,6 @@ class FileLastModifiedNode extends SimpleNode implements Collectable, WaitForMe 
 
   @override
   void collectChildren() {
-  }
-
-  @override
-  onSubscribe() {
-    super.onSubscribe();
-    referenceCount++;
-    loadValue();
   }
 
   loadValue() async {
@@ -500,14 +535,6 @@ class FileLastModifiedNode extends SimpleNode implements Collectable, WaitForMe 
   bool isLoadingValue = false;
 
   @override
-  onUnsubscribe() {
-    referenceCount--;
-    collect();
-  }
-
-  int referenceCount = 0;
-
-  @override
   onRemoving() {
     super.onRemoving();
     clearValue();
@@ -523,7 +550,7 @@ class FileLastModifiedNode extends SimpleNode implements Collectable, WaitForMe 
   }
 }
 
-class FileContentNode extends SimpleNode implements Collectable, WaitForMe {
+class FileContentNode extends ReferencedNode implements WaitForMe, ValueExpendable {
   FileSystemNode fileNode;
 
   FileContentNode(String path) : super(path);
@@ -539,15 +566,10 @@ class FileContentNode extends SimpleNode implements Collectable, WaitForMe {
   }
 
   @override
-  int calculateReferences([bool includeChildren = true]) {
-    return referenceCount;
-  }
-
-  @override
   void collect() {
     int allReferenceCounts = parent is Collectable ?
-      (parent as Collectable).calculateReferences(false) :
-      calculateReferences();
+    (parent as Collectable).calculateReferences(false) :
+    calculateReferences();
 
     if (allReferenceCounts == 0) {
       remove();
@@ -556,13 +578,6 @@ class FileContentNode extends SimpleNode implements Collectable, WaitForMe {
 
   @override
   void collectChildren() {
-  }
-
-  @override
-  onSubscribe() {
-    super.onSubscribe();
-    referenceCount++;
-    loadValue();
   }
 
   loadValue() async {
@@ -583,14 +598,6 @@ class FileContentNode extends SimpleNode implements Collectable, WaitForMe {
   bool isLoadingValue = false;
 
   @override
-  onUnsubscribe() {
-    referenceCount--;
-    collect();
-  }
-
-  int referenceCount = 0;
-
-  @override
   onRemoving() {
     super.onRemoving();
     clearValue();
@@ -606,7 +613,7 @@ class FileContentNode extends SimpleNode implements Collectable, WaitForMe {
   }
 }
 
-class DirectoryMakeDirectoryNode extends SimpleNode implements Collectable, WaitForMe {
+class DirectoryMakeDirectoryNode extends ReferencedNode implements WaitForMe {
   FileSystemNode fileNode;
 
   DirectoryMakeDirectoryNode(String path) : super(path) {
@@ -632,15 +639,10 @@ class DirectoryMakeDirectoryNode extends SimpleNode implements Collectable, Wait
   }
 
   @override
-  int calculateReferences([bool includeChildren = true]) {
-    return referenceCount;
-  }
-
-  @override
   void collect() {
     int allReferenceCounts = parent is Collectable ?
-      (parent as Collectable).calculateReferences(false) :
-      calculateReferences();
+    (parent as Collectable).calculateReferences(false) :
+    calculateReferences();
 
     if (allReferenceCounts == 0) {
       remove();
@@ -649,17 +651,6 @@ class DirectoryMakeDirectoryNode extends SimpleNode implements Collectable, Wait
 
   @override
   void collectChildren() {
-  }
-
-  @override
-  onStartListListen() {
-    referenceCount++;
-  }
-
-  @override
-  onAllListCancel() {
-    referenceCount--;
-    collect();
   }
 
   @override
@@ -679,13 +670,6 @@ class DirectoryMakeDirectoryNode extends SimpleNode implements Collectable, Wait
     await created.create(recursive: true);
   }
 
-  int referenceCount = 0;
-
-  @override
-  onRemoving() {
-    super.onRemoving();
-  }
-
   @override
   Future get onLoaded {
     if (!fileNode.isPopulated) {
@@ -696,7 +680,7 @@ class DirectoryMakeDirectoryNode extends SimpleNode implements Collectable, Wait
   }
 }
 
-class FileDeleteNode extends SimpleNode implements Collectable, WaitForMe {
+class FileDeleteNode extends ReferencedNode implements WaitForMe {
   FileSystemNode fileNode;
 
   FileDeleteNode(String path) : super(path) {
@@ -715,11 +699,6 @@ class FileDeleteNode extends SimpleNode implements Collectable, WaitForMe {
   }
 
   @override
-  int calculateReferences([bool includeChildren = true]) {
-    return referenceCount;
-  }
-
-  @override
   void collect() {
     int allReferenceCounts = parent is Collectable ?
     (parent as Collectable).calculateReferences(false) :
@@ -735,26 +714,12 @@ class FileDeleteNode extends SimpleNode implements Collectable, WaitForMe {
   }
 
   @override
-  onStartListListen() {
-    referenceCount++;
-  }
-
-  @override
-  onAllListCancel() {
-    referenceCount--;
-    collect();
-  }
-
-  @override
   onInvoke(Map<String, dynamic> params) async {
+    if (params["areYouSure"] == false) {
+      return;
+    }
+
     await fileNode.entity.delete(recursive: true);
-  }
-
-  int referenceCount = 0;
-
-  @override
-  onRemoving() {
-    super.onRemoving();
   }
 
   @override
