@@ -198,6 +198,7 @@ class AddMountNode extends SimpleNode {
 }
 
 class MountNode extends FileSystemNode {
+  int get maxContentSize => 4 * 1024 * 1024;
   String get directory => attributes["@directory"];
   bool get showHiddenFiles => attributes["@showHiddenFiles"] == true;
 
@@ -207,12 +208,19 @@ class MountNode extends FileSystemNode {
 
   @override
   onCreated() {
-    super.onCreated();
-
     link.addNode("${path}/_@unmount", {
       r"$name": "Unmount",
       r"$is": "remove",
       r"$invokable": "write"
+    });
+
+    new Future(() async {
+      try {
+        var dir = new Directory(directory);
+        if (!(await dir.exists())) {
+          await dir.create(recursive: true);
+        }
+      } catch (e) {}
     });
   }
 
@@ -569,6 +577,7 @@ class FileLastModifiedNode extends ReferencedNode implements WaitForMe, ValueExp
 
 class FileContentNode extends ReferencedNode implements WaitForMe, ValueExpendable {
   FileSystemNode fileNode;
+  MountNode mount;
 
   FileContentNode(String path) : super(path);
 
@@ -580,6 +589,10 @@ class FileContentNode extends ReferencedNode implements WaitForMe, ValueExpendab
       remove();
       return;
     }
+
+    var mountPath = path.split("/").take(2).join("/");
+
+    mount = link.getNode(mountPath);
   }
 
   loadValue() async {
@@ -593,7 +606,7 @@ class FileContentNode extends ReferencedNode implements WaitForMe, ValueExpendab
     try {
       var file = fileNode.entity as File;
       var len = await file.length();
-      if (len < (4 * 1024 * 1024)) {
+      if (len < (mount.maxContentSize)) {
         Uint8List bytes = await file.readAsBytes();
         var oldType = configs[r"$type"];
         try {
