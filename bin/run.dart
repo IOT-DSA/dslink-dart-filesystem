@@ -3,7 +3,9 @@ import "package:dslink/nodes.dart";
 import "package:dslink/io.dart";
 
 import "dart:async";
+import "dart:convert";
 import "dart:io";
+import "dart:typed_data";
 
 import "package:path/path.dart" as pathlib;
 
@@ -55,6 +57,11 @@ main(List<String> args) async {
         "name": "directory",
         "type": "string",
         "placeholder": pathPlaceholder
+      },
+      {
+        "name": "showHiddenFiles",
+        "type": "bool",
+        "description": "Show Hidden Files"
       }
     ],
     r"$is": "addMount"
@@ -157,6 +164,7 @@ class AddMountNode extends SimpleNode {
   onInvoke(Map<String, dynamic> params) async {
     var name = params["name"];
     var p = params["directory"];
+    var showHiddenFiles = params["showHiddenFiles"];
 
     if (name == null) {
       throw new Exception("Name for mount was not provided.");
@@ -181,7 +189,8 @@ class AddMountNode extends SimpleNode {
     link.addNode("/${tname}", {
       r"$is": "mount",
       r"$name": name,
-      "@directory": dir.path
+      "@directory": dir.path,
+      "@showHiddenFiles": showHiddenFiles
     });
 
     link.save();
@@ -190,6 +199,7 @@ class AddMountNode extends SimpleNode {
 
 class MountNode extends FileSystemNode {
   String get directory => attributes["@directory"];
+  bool get showHiddenFiles => attributes["@showHiddenFiles"] == true;
 
   MountNode(String path) : super(path) {
     references.add(ReferenceType.MOUNT);
@@ -231,7 +241,8 @@ class MountNode extends FileSystemNode {
     return {
       r"$is": "mount",
       r"$name": configs[r"$name"],
-      "@directory": attributes["@directory"]
+      "@directory": attributes["@directory"],
+      "@showHiddenFiles": attributes["@showHiddenFiles"]
     };
   }
 
@@ -268,6 +279,21 @@ abstract class ReferencedNode extends SimpleNode implements Collectable {
     }
 
     return total;
+  }
+
+  @override
+  void collect() {
+    int allReferenceCounts = parent is Collectable ?
+      (parent as Collectable).calculateReferences(false) :
+      calculateReferences();
+
+    if (allReferenceCounts == 0) {
+      remove();
+    }
+  }
+
+  @override
+  void collectChildren() {
   }
 
   @override
@@ -344,6 +370,9 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
       if (entity is Directory) {
         await for (FileSystemEntity child in (entity as Directory).list()) {
           String relative = pathlib.relative(child.path, from: entity.path);
+          if (relative.startsWith(".") && !mount.showHiddenFiles) {
+            continue;
+          }
           String name = NodeNamer.createName(relative);
           FileSystemNode node = new FileSystemNode("${path}/${name}");
           provider.setNode(node.path, node);
@@ -365,6 +394,9 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
             FileSystemEntity child = await getFileSystemEntity(event.path);
             if (child != null) {
               String relative = pathlib.relative(child.path, from: entity.path);
+              if (relative.startsWith(".") && !mount.showHiddenFiles) {
+                return;
+              }
               String name = NodeNamer.createName(relative);
               FileSystemNode node = new FileSystemNode("${path}/${name}");
               provider.setNode(node.path, node);
@@ -502,21 +534,6 @@ class FileLastModifiedNode extends ReferencedNode implements WaitForMe, ValueExp
     }
   }
 
-  @override
-  void collect() {
-    int allReferenceCounts = parent is Collectable ?
-    (parent as Collectable).calculateReferences(false) :
-    calculateReferences();
-
-    if (allReferenceCounts == 0) {
-      remove();
-    }
-  }
-
-  @override
-  void collectChildren() {
-  }
-
   loadValue() async {
     if (isLoadingValue) {
       await new Future.delayed(const Duration(milliseconds: 25), loadValue);
@@ -565,21 +582,6 @@ class FileContentNode extends ReferencedNode implements WaitForMe, ValueExpendab
     }
   }
 
-  @override
-  void collect() {
-    int allReferenceCounts = parent is Collectable ?
-    (parent as Collectable).calculateReferences(false) :
-    calculateReferences();
-
-    if (allReferenceCounts == 0) {
-      remove();
-    }
-  }
-
-  @override
-  void collectChildren() {
-  }
-
   loadValue() async {
     if (isLoadingValue) {
       await new Future.delayed(const Duration(milliseconds: 25), loadValue);
@@ -589,7 +591,25 @@ class FileContentNode extends ReferencedNode implements WaitForMe, ValueExpendab
     isLoadingValue = true;
 
     try {
-      updateValue(await (fileNode.entity as File).readAsString());
+      var file = fileNode.entity as File;
+      var len = await file.length();
+      if (len < (4 * 1024 * 1024)) {
+        Uint8List bytes = await file.readAsBytes();
+        var oldType = configs[r"$type"];
+        try {
+          configs[r"$type"] = "string";
+          updateValue(const Utf8Decoder().convert(bytes));
+        } catch (e) {
+          configs[r"$type"] = "binary";
+          updateValue(bytes.buffer.asByteData());
+        }
+        var newType = configs[r"$type"];
+        if (oldType != newType) {
+          updateList(r"$type");
+        }
+      } else {
+        updateValue(null);
+      }
     } catch (e) {
     }
     isLoadingValue = false;
@@ -639,21 +659,6 @@ class DirectoryMakeDirectoryNode extends ReferencedNode implements WaitForMe {
   }
 
   @override
-  void collect() {
-    int allReferenceCounts = parent is Collectable ?
-    (parent as Collectable).calculateReferences(false) :
-    calculateReferences();
-
-    if (allReferenceCounts == 0) {
-      remove();
-    }
-  }
-
-  @override
-  void collectChildren() {
-  }
-
-  @override
   onInvoke(Map<String, dynamic> params) async {
     String name = params["name"];
     if (name == null || name.isEmpty) {
@@ -696,21 +701,6 @@ class FileDeleteNode extends ReferencedNode implements WaitForMe {
       remove();
       return;
     }
-  }
-
-  @override
-  void collect() {
-    int allReferenceCounts = parent is Collectable ?
-    (parent as Collectable).calculateReferences(false) :
-    calculateReferences();
-
-    if (allReferenceCounts == 0) {
-      remove();
-    }
-  }
-
-  @override
-  void collectChildren() {
   }
 
   @override
