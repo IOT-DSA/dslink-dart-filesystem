@@ -37,6 +37,7 @@ main(List<String> args) async {
   }, nodes: {
     "default": {
       r"$is": "mount",
+      r"$name": "default",
       "@directory": Platform.script.resolve("../home").toFilePath()
     }
   });
@@ -461,13 +462,22 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
             remove();
             return;
           } else if (event.type == ChangeType.MODIFY) {
-            await (children["_@content"] as FileContentNode).loadValue();
-            await (children["_@modified"] as FileLastModifiedNode).loadValue();
+            FileContentNode contentNode = children["_@content"];
+            if (contentNode != null) {
+              await contentNode.loadValue();
+            }
+
+            FileLastModifiedNode modifiedNode = children["_@modified"];
+            if (modifiedNode != null) {
+              await modifiedNode.loadValue();
+            }
           }
         });
 
         fileWatchSub.onDone(() {
-          (watcher as ManuallyClosedWatcher).close();
+          if (watcher is ManuallyClosedWatcher) {
+            (watcher as ManuallyClosedWatcher).close();
+          }
         });
 
         link.addNode("${path}/_@content", {
