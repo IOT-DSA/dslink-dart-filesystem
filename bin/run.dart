@@ -29,6 +29,11 @@ main(List<String> args) async {
     "fileModified": (String path) => new FileLastModifiedNode(path),
     "directoryMakeDirectory": (String path) => new DirectoryMakeDirectoryNode(path),
     "fileDelete": (String path) => new FileDeleteNode(path)
+  }, nodes: {
+    "default": {
+      r"$is": "mount",
+      "@directory": Platform.script.resolve("../home").toFilePath()
+    }
   });
 
   link.init();
