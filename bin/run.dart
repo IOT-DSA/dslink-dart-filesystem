@@ -559,7 +559,9 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
 class FileLastModifiedNode extends ReferencedNode implements WaitForMe, ValueExpendable {
   FileSystemNode fileNode;
 
-  FileLastModifiedNode(String path) : super(path);
+  FileLastModifiedNode(String path) : super(path) {
+    configs[r"$type"] = "string";
+  }
 
   @override
   onCreated() {
@@ -619,6 +621,7 @@ class FileContentNode extends ReferencedNode implements WaitForMe, ValueExpendab
 
   FileContentNode(String path) : super(path) {
     configs[r"$writable"] = "write";
+    configs[r"$type"] = "dynamic";
   }
 
   @override
