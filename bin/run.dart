@@ -9,9 +9,6 @@ import "dart:typed_data";
 
 import "package:path/path.dart" as pathlib;
 
-import "package:watcher/watcher.dart";
-import "package:watcher/src/resubscribable.dart";
-
 LinkProvider link;
 SimpleNodeProvider provider;
 
@@ -373,7 +370,6 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
   MountNode mount;
   String filePath;
   FileSystemEntity entity;
-  Watcher watcher;
 
   FileSystemNode(String path) : super(path) {
     p = new Path(path);
@@ -422,22 +418,15 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
           fileWatchSub.cancel();
         }
 
-        if (watcher != null) {
-          if (watcher is ManuallyClosedWatcher) {
-            (watcher as ManuallyClosedWatcher).close();
-          }
-        }
-
-        watcher = new DirectoryWatcher(entity.path);
-        fileWatchSub = watcher.events.listen((WatchEvent event) async {
+        fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
           if (event.path == filePath) {
-            if (event.type == ChangeType.REMOVE) {
+            if (event.type == FileSystemEvent.DELETE) {
               remove();
               return;
             }
           }
 
-          if (event.type == ChangeType.ADD) {
+          if (event.type == FileSystemEvent.CREATE) {
             FileSystemEntity child = await getFileSystemEntity(event.path);
             if (child != null) {
               String relative = pathlib.relative(child.path, from: entity.path);
@@ -448,7 +437,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
               FileSystemNode node = new FileSystemNode("${path}/${name}");
               provider.setNode(node.path, node);
             }
-          } else if (event.type == ChangeType.REMOVE) {
+          } else if (event.type == FileSystemEvent.DELETE) {
             String relative = pathlib.relative(event.path, from: entity.path);
             String name = NodeNamer.createName(relative);
             provider.removeNode("${path}/${name}");
@@ -463,22 +452,11 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
           r"$is": "directoryMakeFile"
         });
       } else if (entity is File) {
-        if (fileWatchSub != null) {
-          fileWatchSub.cancel();
-        }
-
-        if (watcher != null) {
-          if (watcher is ManuallyClosedWatcher) {
-            (watcher as ManuallyClosedWatcher).close();
-          }
-        }
-
-        watcher = new FileWatcher(entity.path);
-        fileWatchSub = watcher.events.listen((WatchEvent event) async {
-          if (event.type == ChangeType.REMOVE) {
+        fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
+          if (event.type == FileSystemEvent.DELETE) {
             remove();
             return;
-          } else if (event.type == ChangeType.MODIFY) {
+          } else if (event.type == FileSystemEvent.MODIFY) {
             await (children["_@content"] as FileContentNode).loadValue();
             await (children["_@modified"] as FileLastModifiedNode).loadValue();
           }
@@ -552,8 +530,8 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
     LocalNode parent = provider.getNode(p.parentPath);
 
     int allReferenceCounts = parent is Collectable ?
-      (parent as Collectable).calculateReferences(false) :
-      calculateReferences();
+    (parent as Collectable).calculateReferences(false) :
+    calculateReferences();
 
     if (allReferenceCounts == 0) {
       if (const bool.fromEnvironment("verbose.collect", defaultValue: false)) {
@@ -581,12 +559,6 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
     super.onRemoving();
     if (fileWatchSub != null) {
       fileWatchSub.cancel();
-    }
-
-    if (watcher != null) {
-      if (watcher is ManuallyClosedWatcher) {
-        (watcher as ManuallyClosedWatcher).close();
-      }
     }
   }
 }
