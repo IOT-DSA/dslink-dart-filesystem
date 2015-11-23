@@ -9,6 +9,9 @@ import "dart:typed_data";
 
 import "package:path/path.dart" as pathlib;
 
+import "package:watcher/watcher.dart";
+import "package:watcher/src/resubscribable.dart";
+
 LinkProvider link;
 SimpleNodeProvider provider;
 
@@ -452,14 +455,19 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
           r"$is": "directoryMakeFile"
         });
       } else if (entity is File) {
-        fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
-          if (event.type == FileSystemEvent.DELETE) {
+        var watcher = new FileWatcher(entity.path);
+        fileWatchSub = watcher.events.listen((WatchEvent event) async {
+          if (event.type == ChangeType.REMOVE) {
             remove();
             return;
-          } else if (event.type == FileSystemEvent.MODIFY) {
+          } else if (event.type == ChangeType.MODIFY) {
             await (children["_@content"] as FileContentNode).loadValue();
             await (children["_@modified"] as FileLastModifiedNode).loadValue();
           }
+        });
+
+        fileWatchSub.onDone(() {
+          (watcher as ManuallyClosedWatcher).close();
         });
 
         link.addNode("${path}/_@content", {
