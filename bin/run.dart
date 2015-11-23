@@ -28,6 +28,7 @@ main(List<String> args) async {
     "fileContent": (String path) => new FileContentNode(path),
     "fileModified": (String path) => new FileLastModifiedNode(path),
     "directoryMakeDirectory": (String path) => new DirectoryMakeDirectoryNode(path),
+    "directoryMakeFile": (String path) => new DirectoryMakeFileNode(path),
     "fileDelete": (String path) => new FileDeleteNode(path)
   }, nodes: {
     "default": {
@@ -92,6 +93,8 @@ main(List<String> args) async {
       node = new FileLastModifiedNode(path);
     } else if (name == "_@mkdir") {
       node = new DirectoryMakeDirectoryNode(path);
+    } else if (name == "_@mkfile") {
+      node = new DirectoryMakeFileNode(path);
     } else if (name == "_@delete") {
       node = new FileDeleteNode(path);
     } else {
@@ -424,6 +427,10 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
         link.addNode("${path}/_@mkdir", {
           r"$is": "directoryMakeDirectory"
         });
+
+        link.addNode("${path}/_@mkfile", {
+          r"$is": "directoryMakeFile"
+        });
       } else if (entity is File) {
         fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
           if (event.type == FileSystemEvent.DELETE) {
@@ -651,11 +658,63 @@ class FileContentNode extends ReferencedNode implements WaitForMe, ValueExpendab
   }
 }
 
+class DirectoryMakeFileNode extends ReferencedNode implements WaitForMe {
+  FileSystemNode fileNode;
+
+  DirectoryMakeFileNode(String path) : super(path) {
+    configs[r"$name"] = "Create File";
+    configs[r"$invokable"] = "write";
+    configs[r"$params"] = [
+      {
+        "name": "name",
+        "type": "string",
+        "placeholder": "file.txt"
+      }
+    ];
+  }
+
+  @override
+  onCreated() {
+    fileNode = link.getNode(new Path(path).parentPath);
+
+    if (fileNode is! FileSystemNode) {
+      remove();
+      return;
+    }
+  }
+
+  @override
+  onInvoke(Map<String, dynamic> params) async {
+    String name = params["name"];
+    if (name == null || name.isEmpty) {
+      throw new Exception("File name not provided.");
+    }
+
+    Directory entity = fileNode.entity;
+    File created = new File(pathlib.join(entity.path, name));
+
+    if (await created.exists()) {
+      throw new Exception("File '${name}' already exists.");
+    }
+
+    await created.create(recursive: true);
+  }
+
+  @override
+  Future get onLoaded {
+    if (!fileNode.isPopulated) {
+      return fileNode.populate();
+    } else {
+      return new Future.value();
+    }
+  }
+}
+
 class DirectoryMakeDirectoryNode extends ReferencedNode implements WaitForMe {
   FileSystemNode fileNode;
 
   DirectoryMakeDirectoryNode(String path) : super(path) {
-    configs[r"$name"] = "Make Directory";
+    configs[r"$name"] = "Create Directory";
     configs[r"$invokable"] = "write";
     configs[r"$params"] = [
       {
