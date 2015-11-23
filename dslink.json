@@ -15,7 +15,7 @@
     },
     "name": {
       "type": "string",
-      "default": "File"
+      "default": "FileSystem"
     },
     "log": {
       "type": "enum",
