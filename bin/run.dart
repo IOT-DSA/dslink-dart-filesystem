@@ -111,6 +111,23 @@ main(List<String> args) async {
 
   await link.connect();
 
+  Scheduler.safeEvery(Interval.FIFTY_MILLISECONDS, () async {
+    while (writeQueue.isNotEmpty) {
+      var item = writeQueue.removeAt(0);
+      var file = new File(item.path);
+      try {
+        if (item.data is ByteData) {
+          await file.writeAsBytes((item.data as ByteData).buffer.asUint8List());
+        } else if (item.data == null) {
+          await file.writeAsBytes([]);
+        } else {
+          await file.writeAsString(item.data.toString());
+        }
+      } catch (e) {
+      }
+    }
+  });
+
   if (const bool.fromEnvironment("debugger", defaultValue: false)) {
     stdout.write("> ");
     readStdinLines().listen((line) {
@@ -587,11 +604,22 @@ class FileLastModifiedNode extends ReferencedNode implements WaitForMe, ValueExp
   }
 }
 
+class FileWriteQueue {
+  final String path;
+  final dynamic data;
+
+  FileWriteQueue(this.path, this.data);
+}
+
+List<FileWriteQueue> writeQueue = [];
+
 class FileContentNode extends ReferencedNode implements WaitForMe, ValueExpendable {
   FileSystemNode fileNode;
   MountNode mount;
 
-  FileContentNode(String path) : super(path);
+  FileContentNode(String path) : super(path) {
+    configs[r"$writable"] = "write";
+  }
 
   @override
   onCreated() {
@@ -605,6 +633,14 @@ class FileContentNode extends ReferencedNode implements WaitForMe, ValueExpendab
     var mountPath = path.split("/").take(2).join("/");
 
     mount = link.getNode(mountPath);
+  }
+
+  @override
+  onSetValue(Object val) {
+    String p = fileNode.filePath;
+    writeQueue.removeWhere((x) => x.path == p);
+    writeQueue.add(new FileWriteQueue(p, val));
+    return true;
   }
 
   loadValue() async {
