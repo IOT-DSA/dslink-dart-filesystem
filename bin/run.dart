@@ -29,7 +29,8 @@ main(List<String> args) async {
     "fileModified": (String path) => new FileLastModifiedNode(path),
     "directoryMakeDirectory": (String path) => new DirectoryMakeDirectoryNode(path),
     "directoryMakeFile": (String path) => new DirectoryMakeFileNode(path),
-    "fileDelete": (String path) => new FileDeleteNode(path)
+    "fileDelete": (String path) => new FileDeleteNode(path),
+    "readBinaryChunk": (String path) => new FileReadBinaryChunkNode(path)
   }, nodes: {
     "default": {
       r"$is": "mount",
@@ -97,6 +98,8 @@ main(List<String> args) async {
       node = new DirectoryMakeFileNode(path);
     } else if (name == "_@delete") {
       node = new FileDeleteNode(path);
+    } else if (name == "_@readBinaryChunk") {
+      node = new FileReadBinaryChunkNode(path);
     } else {
       node = new FileSystemNode(path);
     }
@@ -465,6 +468,10 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
           r"$type": "string"
         });
 
+        link.addNode("${path}/_@readBinaryChunk", {
+          r"$is": "readBinaryChunk"
+        });
+
         link.addNode("${path}/_@modified", {
           r"$is": "fileModified",
           r"$name": "Last Modified",
@@ -826,6 +833,88 @@ class FileDeleteNode extends ReferencedNode implements WaitForMe {
     }
 
     await fileNode.entity.delete(recursive: true);
+  }
+
+  @override
+  Future get onLoaded {
+    if (!fileNode.isPopulated) {
+      return fileNode.populate();
+    } else {
+      return new Future.value();
+    }
+  }
+}
+
+class FileReadBinaryChunkNode extends ReferencedNode implements WaitForMe {
+  FileSystemNode fileNode;
+
+  FileReadBinaryChunkNode(String path) : super(path) {
+    configs[r"$name"] = "Read Binary Chunk";
+    configs.addAll({
+      r"$params": [
+        {
+          "name": "start",
+          "type": "int",
+          "default": 0
+        },
+        {
+          "name": "end",
+          "type": "int"
+        }
+      ],
+      r"$result": "values",
+      r"$invokable": "read",
+      r"$columns": [
+        {
+          "name": "data",
+          "type": "binary"
+        }
+      ]
+    });
+  }
+
+  @override
+  onCreated() {
+    fileNode = link.getNode(new Path(path).parentPath);
+
+    if (fileNode is! FileSystemNode) {
+      remove();
+      return;
+    }
+  }
+
+  @override
+  onInvoke(Map<String, dynamic> params) async {
+    int start = int.parse(params["start"].toString(), onError: (s) => null);
+    int end = int.parse(params["end"].toString(), onError: (s) => null);
+
+    if (start == null || start < 0) {
+      start = 0;
+    }
+
+    var file = fileNode.entity;
+    if (end == null || end < 0) {
+      end = await file.length();
+    }
+
+    Uint8List data = await file.openRead(start, end).reduce((Uint8List a, Uint8List b) {
+      var list = new Uint8List(a.length + b.length);
+      var c = 0;
+      for (var byte in a) {
+        list[c] = byte;
+        c++;
+      }
+
+      for (var byte in b) {
+        list[c] = byte;
+        c++;
+      }
+      return list;
+    });
+
+    return {
+      "data": data.buffer.asByteData()
+    };
   }
 
   @override
