@@ -117,7 +117,7 @@ main(List<String> args) async {
 
   await link.connect();
 
-  Scheduler.safeEvery(Interval.FIFTY_MILLISECONDS, () async {
+  Scheduler.safeEvery(Interval.SIXTEEN_MILLISECONDS, () async {
     while (writeQueue.isNotEmpty) {
       var item = writeQueue.removeAt(0);
       var file = new File(item.path);
