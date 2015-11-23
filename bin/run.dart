@@ -840,7 +840,9 @@ class FileDeleteNode extends ReferencedNode implements WaitForMe {
       return;
     }
 
-    await fileNode.entity.delete(recursive: true);
+    try {
+      await fileNode.entity.delete(recursive: true);
+    } catch (e) {}
   }
 
   @override
