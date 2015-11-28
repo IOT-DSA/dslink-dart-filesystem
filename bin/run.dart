@@ -33,6 +33,7 @@ main(List<String> args) async {
     "directoryMakeDirectory": (String path) => new DirectoryMakeDirectoryNode(path),
     "directoryMakeFile": (String path) => new DirectoryMakeFileNode(path),
     "fileDelete": (String path) => new FileDeleteNode(path),
+    "fileLength": (String path) => new FileLengthNode(path),
     "readBinaryChunk": (String path) => new FileReadBinaryChunkNode(path)
   }, nodes: {
     "default": {
@@ -96,6 +97,8 @@ main(List<String> args) async {
       node = new FileContentNode(path);
     } else if (name == "_@modified") {
       node = new FileLastModifiedNode(path);
+    } else if (name == "_@length") {
+      node = new FileLengthNode(path);
     } else if (name == "_@mkdir") {
       node = new DirectoryMakeDirectoryNode(path);
     } else if (name == "_@mkfile") {
@@ -471,6 +474,11 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
             if (modifiedNode != null) {
               await modifiedNode.loadValue();
             }
+
+            FileLengthNode lengthNode = children["_@length"];
+            if (lengthNode != null) {
+              await lengthNode.loadValue();
+            }
           }
         });
 
@@ -493,6 +501,12 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
         link.addNode("${path}/_@modified", {
           r"$is": "fileModified",
           r"$name": "Last Modified",
+          r"$type": "string"
+        });
+
+        link.addNode("${path}/_@length", {
+          r"$is": "fileLength",
+          r"$name": "Size",
           r"$type": "string"
         });
       }
@@ -608,6 +622,59 @@ class FileLastModifiedNode extends ReferencedNode implements WaitForMe, ValueExp
 
     try {
       updateValue((await (fileNode.entity as File).lastModified()).toString());
+    } catch (e) {
+    }
+    isLoadingValue = false;
+  }
+
+  bool isLoadingValue = false;
+
+  @override
+  onRemoving() {
+    super.onRemoving();
+    clearValue();
+  }
+
+  @override
+  Future get onLoaded {
+    if (!fileNode.isPopulated) {
+      return fileNode.populate();
+    } else {
+      return new Future.value();
+    }
+  }
+}
+
+class FileLengthNode extends ReferencedNode implements WaitForMe, ValueExpendable {
+  FileSystemNode fileNode;
+
+  FileLengthNode(String path) : super(path) {
+    configs[r"$type"] = "number";
+    attributes["@unit"] = "bytes";
+  }
+
+  @override
+  onCreated() {
+    fileNode = link.getNode(new Path(path).parentPath);
+
+    if (fileNode is! FileSystemNode) {
+      remove();
+      return;
+    }
+
+    updateList("@unit");
+  }
+
+  loadValue() async {
+    if (isLoadingValue) {
+      await new Future.delayed(const Duration(milliseconds: 25), loadValue);
+      return;
+    }
+
+    isLoadingValue = true;
+
+    try {
+      updateValue(await (fileNode.entity as File).length());
     } catch (e) {
     }
     isLoadingValue = false;
