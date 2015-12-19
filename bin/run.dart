@@ -425,31 +425,34 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
           fileWatchSub.cancel();
         }
 
-        fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
-          if (event.path == filePath) {
-            if (event.type == FileSystemEvent.DELETE) {
-              remove();
-              return;
-            }
-          }
-
-          if (event.type == FileSystemEvent.CREATE) {
-            FileSystemEntity child = await getFileSystemEntity(event.path);
-            if (child != null) {
-              String relative = pathlib.relative(child.path, from: entity.path);
-              if (relative.startsWith(".") && !mount.showHiddenFiles) {
+        try {
+          fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
+            if (event.path == filePath) {
+              if (event.type == FileSystemEvent.DELETE) {
+                remove();
                 return;
               }
-              String name = NodeNamer.createName(relative);
-              FileSystemNode node = new FileSystemNode("${path}/${name}");
-              provider.setNode(node.path, node);
             }
-          } else if (event.type == FileSystemEvent.DELETE) {
-            String relative = pathlib.relative(event.path, from: entity.path);
-            String name = NodeNamer.createName(relative);
-            provider.removeNode("${path}/${name}");
-          }
-        });
+
+            if (event.type == FileSystemEvent.CREATE) {
+              FileSystemEntity child = await getFileSystemEntity(event.path);
+              if (child != null) {
+                String relative = pathlib.relative(child.path, from: entity.path);
+                if (relative.startsWith(".") && !mount.showHiddenFiles) {
+                  return;
+                }
+                String name = NodeNamer.createName(relative);
+                FileSystemNode node = new FileSystemNode("${path}/${name}");
+                provider.setNode(node.path, node);
+              }
+            } else if (event.type == FileSystemEvent.DELETE) {
+              String relative = pathlib.relative(event.path, from: entity.path);
+              String name = NodeNamer.createName(relative);
+              provider.removeNode("${path}/${name}");
+            }
+          });
+        } catch (e) {
+        }
 
         link.addNode("${path}/_@mkdir", {
           r"$is": "directoryMakeDirectory"
