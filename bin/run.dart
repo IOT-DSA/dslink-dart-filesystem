@@ -775,9 +775,11 @@ class FileContentNode extends ReferencedNode implements WaitForMe, ValueExpendab
         var oldType = configs[r"$type"];
         try {
           configs[r"$type"] = "string";
+          configs[r"$editor"] = "textarea";
           updateValue(const Utf8Decoder().convert(bytes));
         } catch (e) {
           configs[r"$type"] = "binary";
+          configs.remove(r"$editor");
           updateValue(bytes.buffer.asByteData());
         }
         var newType = configs[r"$type"];
