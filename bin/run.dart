@@ -21,6 +21,8 @@ enum ReferenceType {
   MOUNT
 }
 
+Directory currentDir;
+
 main(List<String> args) async {
   link = new LinkProvider(args, "FileSystem-", provider: provider, autoInitialize: false, profiles: {
     "mount": (String path) => new MountNode(path),
@@ -36,14 +38,30 @@ main(List<String> args) async {
     "fileLength": (String path) => new FileLengthNode(path),
     "readBinaryChunk": (String path) => new FileReadBinaryChunkNode(path)
   }, nodes: {
-    "default": {
-      r"$is": "mount",
-      r"$name": "default",
-      "@directory": Platform.script.resolve("../home").toFilePath()
+    "@dirty": true
+  });
+
+  link.configure(optionsHandler: (opts) {
+    if (opts != null && opts["base-path"] != null) {
+      currentDir = new Directory(opts["base-path"]);
+    } else {
+      currentDir = Directory.current;
     }
   });
 
   link.init();
+
+  SimpleNode rootNode = link.provider.getNode("/");
+
+  if (rootNode.attributes["@dirty"] == true) {
+    var homeDir = pathlib.join(currentDir.path, "home");
+    link.addNode("/default", {
+      r"$is": "mount",
+      r"$name": "default",
+      "@directory": homeDir
+    });
+    rootNode.attributes.remove("@dirty");
+  }
 
   provider = link.provider;
 
