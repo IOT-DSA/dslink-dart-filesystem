@@ -4,5 +4,4 @@ version: 1.0.0
 dependencies:
   dslink:
     git: https://github.com/IOT-DSA/sdk-dslink-dart.git
-    # path: /Users/alex/DSA/DartSDK
   watcher: "^0.9.7"

@@ -734,7 +734,8 @@ class FileContentNode extends ReferencedNode implements WaitForMe, ValueExpendab
 
   FileContentNode(String path) : super(path) {
     configs[r"$writable"] = "write";
-    configs[r"$type"] = "dynamic";
+    configs[r"$type"] = "string";
+    configs[r"$editor"] = "textarea";
   }
 
   @override
