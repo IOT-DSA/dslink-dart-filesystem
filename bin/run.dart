@@ -424,6 +424,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
 
     // Entity does not exist. Mark us as not populated to re-verify.
     if (!(await entity.exists())) {
+      remove();
       return;
     }
 
@@ -448,6 +449,8 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
             if (event.path == filePath) {
               if (event.type == FileSystemEvent.DELETE) {
                 remove();
+                parent.updateList(new Path(path).name);
+                updateList(r"$is");
                 return;
               }
             }
@@ -467,6 +470,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
               String relative = pathlib.relative(event.path, from: entity.path);
               String name = NodeNamer.createName(relative);
               provider.removeNode("${path}/${name}");
+              updateList(name);
             }
           });
         } catch (e) {
