@@ -123,6 +123,8 @@ main(List<String> args) async {
       node = new DirectoryMakeFileNode(path);
     } else if (name == "_@delete") {
       node = new FileDeleteNode(path);
+    } else if (name == "_@move") {
+      node = new FileMoveNode(path);
     } else if (name == "_@readBinaryChunk") {
       node = new FileReadBinaryChunkNode(path);
     } else {
@@ -543,6 +545,17 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
             "name": "areYouSure",
             "type": "bool",
             "default": false
+          }
+        ]
+      });
+
+      link.addNode("${path}/_@move", {
+        r"$is": "fileMove",
+        r"$params": [
+          {
+            "name": "target",
+            "type": "string",
+            "placeholder": "file.txt"
           }
         ]
       });
@@ -1030,6 +1043,49 @@ class FileReadBinaryChunkNode extends ReferencedNode implements WaitForMe {
     return {
       "data": data.buffer.asByteData()
     };
+  }
+
+  @override
+  Future get onLoaded {
+    if (!fileNode.isPopulated) {
+      return fileNode.populate();
+    } else {
+      return new Future.value();
+    }
+  }
+}
+
+class FileMoveNode extends ReferencedNode implements WaitForMe {
+  FileSystemNode fileNode;
+
+  FileMoveNode(String path) : super(path) {
+    configs[r"$name"] = "Move";
+    configs[r"$invokable"] = "write";
+    configs[r"$params"] = [
+      {
+        "name": "target",
+        "type": "string",
+        "placeholder": "file.txt"
+      }
+    ];
+  }
+
+  @override
+  onCreated() {
+    fileNode = link.getNode(new Path(path).parentPath);
+
+    if (fileNode is! FileSystemNode) {
+      remove();
+      return;
+    }
+  }
+
+  @override
+  onInvoke(Map<String, dynamic> params) async {
+    await fileNode.entity.rename(pathlib.join(
+      fileNode.entity.parent.path,
+      params["target"]
+    ));
   }
 
   @override
