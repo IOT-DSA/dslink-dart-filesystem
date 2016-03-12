@@ -15,10 +15,14 @@ import "package:watcher/src/resubscribable.dart";
 LinkProvider link;
 SimpleNodeProvider provider;
 
-enum ReferenceType {
-  LIST,
-  SUBSCRIBE,
-  MOUNT
+class ReferenceType {
+  static const ReferenceType LIST = const ReferenceType("list");
+  static const ReferenceType SUBSCRIBE = const ReferenceType("subscribe");
+  static const ReferenceType MOUNT = const ReferenceType("mount");
+
+  final String name;
+
+  const ReferenceType(this.name);
 }
 
 Directory currentDir;
@@ -36,7 +40,8 @@ main(List<String> args) async {
     "directoryMakeFile": (String path) => new DirectoryMakeFileNode(path),
     "fileDelete": (String path) => new FileDeleteNode(path),
     "fileLength": (String path) => new FileLengthNode(path),
-    "readBinaryChunk": (String path) => new FileReadBinaryChunkNode(path)
+    "readBinaryChunk": (String path) => new FileReadBinaryChunkNode(path),
+    "publish": (String path) => new PublishFileNode(path)
   }, nodes: {
     "@dirty": true
   });
@@ -201,7 +206,9 @@ main(List<String> args) async {
           }
         }
       } else if (line == "help") {
-        print("Commands: show-live-nodes, node-types, show-counts, total-references, trace-references");
+        print(
+          "Commands: show-live-nodes, node-types, show-counts"
+          ", total-references, trace-references");
       } else if (line == "") {
       } else {
         print("Unknown Command: ${line}");
@@ -269,6 +276,23 @@ class MountNode extends FileSystemNode {
       r"$invokable": "write"
     });
 
+    link.addNode("${path}/_@publish", {
+      r"$name": "Publish File",
+      r"$is": "publish",
+      r"$invokable": "write",
+      r"$params": [
+        {
+          "name": "File",
+          "type": "string",
+          "placeholder": "myfile.txt"
+        },
+        {
+          "name": "Content",
+          "type": "dynamic"
+        }
+      ]
+    });
+
     new Future(() async {
       try {
         var dir = new Directory(directory);
@@ -293,7 +317,9 @@ class MountNode extends FileSystemNode {
   void findStrayNodesAndCollect() {
     String base = path + "/";
     for (String key in provider.nodes.keys.toList()) {
-      if (key.startsWith(base) && !key.endsWith("/_@unmount")) {
+      if (key.startsWith(base) &&
+        !key.endsWith("/_@unmount") &&
+        !key.endsWith("/_@publish")) {
         provider.removeNode(key);
       }
     }
@@ -1094,6 +1120,35 @@ class FileMoveNode extends ReferencedNode implements WaitForMe {
       return fileNode.populate();
     } else {
       return new Future.value();
+    }
+  }
+}
+
+class PublishFileNode extends SimpleNode {
+  PublishFileNode(String path) : super(path);
+
+  @override
+  onInvoke(Map<String, dynamic> params) async {
+    var path = params["File"];
+    var content = params["Content"];
+
+    if (path is! String) {
+      throw new Exception("File path not specified.");
+    }
+
+    MountNode mount = parent;
+
+    path = pathlib.join(mount.filePath, path);
+
+    File file = new File(path);
+    if (!(await file.exists())) {
+      await file.create(recursive: true);
+    }
+
+    if (content is ByteData) {
+      await file.writeAsBytes(content.buffer.asUint8List());
+    } else {
+      await file.writeAsString(content.toString());
     }
   }
 }
