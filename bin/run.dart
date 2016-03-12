@@ -483,7 +483,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
         try {
           dirwatch = new DirectoryWatcher(entity.path);
           fileWatchSub = dirwatch.events.listen((WatchEvent event) async {
-            if (event.path == filePath) {
+            if (event.path == filePath || event.path == ".") {
               if (event.type == ChangeType.REMOVE) {
                 remove();
                 addToJustRemovedQueue(path);
@@ -493,20 +493,41 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
               }
             }
 
+            if (!pathlib.isAbsolute(event.path) && event.path.contains("/")) {
+              return;
+            }
+
             if (event.type == ChangeType.ADD) {
-              FileSystemEntity child = await getFileSystemEntity(event.path);
+              FileSystemEntity child = await getFileSystemEntity(
+                pathlib.join(entity.path, event.path)
+              );
+
               if (child != null) {
+                child = child.absolute;
                 String relative = pathlib.relative(child.path, from: entity.path);
                 if (relative.startsWith(".") && !mount.showHiddenFiles) {
                   return;
                 }
-                String name = NodeNamer.createName(relative);
+
+                String base = pathlib.dirname(relative);
+                String name = "${base}/" +
+                  "${NodeNamer.createName(pathlib.basename(relative))}";
+
                 FileSystemNode node = new FileSystemNode("${path}/${name}");
                 provider.setNode(node.path, node);
               }
             } else if (event.type == ChangeType.REMOVE) {
-              String relative = pathlib.relative(event.path, from: entity.path);
-              String name = NodeNamer.createName(relative);
+              String relative = pathlib.normalize(
+                pathlib.relative(
+                  pathlib.join(entity.path, event.path),
+                  from: entity.path
+                )
+              );
+
+              String base = pathlib.dirname(relative);
+              String name = "${base}/" +
+                "${NodeNamer.createName(pathlib.basename(relative))}";
+
               provider.removeNode("${path}/${name}");
               addToJustRemovedQueue("${path}/${name}");
               updateList(name);
@@ -1181,9 +1202,9 @@ Map<FileSystemEntityType, String> FS_TYPE_NAMES = {
 Future<FileSystemEntity> getFileSystemEntity(String path) async {
   var type = await FileSystemEntity.type(path);
   if (type == FileSystemEntityType.FILE) {
-    return new File(path);
+    return new File(path).absolute;
   } else if (type == FileSystemEntityType.DIRECTORY) {
-    return new Directory(path);
+    return new Directory(path).absolute;
   } else {
     return null;
   }
