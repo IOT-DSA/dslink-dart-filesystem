@@ -14,6 +14,7 @@ import "package:watcher/src/resubscribable.dart";
 
 LinkProvider link;
 SimpleNodeProvider provider;
+List<String> justRemovedPaths = [];
 
 class ReferenceType {
   static const ReferenceType LIST = const ReferenceType("list");
@@ -133,6 +134,10 @@ main(List<String> args) async {
     } else if (name == "_@readBinaryChunk") {
       node = new FileReadBinaryChunkNode(path);
     } else {
+      if (justRemovedPaths.contains(path)) {
+        return null;
+      }
+
       node = new FileSystemNode(path);
     }
 
@@ -424,6 +429,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
   MountNode mount;
   String filePath;
   FileSystemEntity entity;
+  DirectoryWatcher dirwatch;
 
   FileSystemNode(String path) : super(path) {
     p = new Path(path);
@@ -453,6 +459,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
 
     // Entity does not exist. Mark us as not populated to re-verify.
     if (!(await entity.exists())) {
+      isPopulated = false;
       remove();
       return;
     }
@@ -474,17 +481,19 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
         }
 
         try {
-          fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
+          dirwatch = new DirectoryWatcher(entity.path);
+          fileWatchSub = dirwatch.events.listen((WatchEvent event) async {
             if (event.path == filePath) {
-              if (event.type == FileSystemEvent.DELETE) {
+              if (event.type == ChangeType.REMOVE) {
                 remove();
+                addToJustRemovedQueue(path);
                 parent.updateList(new Path(path).name);
                 updateList(r"$is");
                 return;
               }
             }
 
-            if (event.type == FileSystemEvent.CREATE) {
+            if (event.type == ChangeType.ADD) {
               FileSystemEntity child = await getFileSystemEntity(event.path);
               if (child != null) {
                 String relative = pathlib.relative(child.path, from: entity.path);
@@ -495,11 +504,19 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
                 FileSystemNode node = new FileSystemNode("${path}/${name}");
                 provider.setNode(node.path, node);
               }
-            } else if (event.type == FileSystemEvent.DELETE) {
+            } else if (event.type == ChangeType.REMOVE) {
               String relative = pathlib.relative(event.path, from: entity.path);
               String name = NodeNamer.createName(relative);
               provider.removeNode("${path}/${name}");
+              addToJustRemovedQueue("${path}/${name}");
               updateList(name);
+            }
+          }, onError: (e) {
+          });
+
+          fileWatchSub.onDone(() {
+            if (dirwatch is ManuallyClosedWatcher) {
+              (dirwatch as ManuallyClosedWatcher).close();
             }
           });
         } catch (e) {
@@ -987,6 +1004,8 @@ class FileDeleteNode extends ReferencedNode implements WaitForMe {
 
     try {
       await fileNode.entity.delete(recursive: true);
+      fileNode.remove();
+      addToJustRemovedQueue(fileNode.path);
     } catch (e) {}
   }
 
@@ -1168,4 +1187,12 @@ Future<FileSystemEntity> getFileSystemEntity(String path) async {
   } else {
     return null;
   }
+}
+
+addToJustRemovedQueue(String p) {
+  justRemovedPaths.add(p);
+
+  new Future.delayed(const Duration(seconds: 2), () async {
+    justRemovedPaths.remove(p);
+  });
 }
