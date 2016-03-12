@@ -288,7 +288,8 @@ class MountNode extends FileSystemNode {
         },
         {
           "name": "Content",
-          "type": "dynamic"
+          "type": "string",
+          "editor": "textarea"
         }
       ]
     });
