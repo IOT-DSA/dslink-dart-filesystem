@@ -491,6 +491,10 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
                 updateList(r"$is");
                 return;
               }
+
+              if (event.path == ".") {
+                return;
+              }
             }
 
             if (!pathlib.isAbsolute(event.path) && event.path.contains("/")) {
