@@ -530,7 +530,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
               );
 
               String base = pathlib.dirname(relative);
-              String name = "${base}/" +
+              String name = (base == "." ? "" : "${base}/") +
                 "${NodeNamer.createName(pathlib.basename(relative))}";
 
               provider.removeNode("${path}/${name}");
