@@ -464,6 +464,10 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
       return;
     }
 
+    if (!provider.hasNode(path)) {
+      provider.setNode(path, this);
+    }
+
     try {
       if (entity is Directory) {
         await for (FileSystemEntity child in (entity as Directory).list()) {
@@ -473,7 +477,10 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
           }
           String name = NodeNamer.createName(relative);
           FileSystemNode node = new FileSystemNode("${path}/${name}");
-          provider.setNode(node.path, node);
+          if (!provider.hasNode(node.path)) {
+            provider.setNode(node.path, node);
+            node.populate();
+          }
         }
 
         if (fileWatchSub != null) {
@@ -481,64 +488,123 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
         }
 
         try {
-          dirwatch = new DirectoryWatcher(entity.path);
-          fileWatchSub = dirwatch.events.listen((WatchEvent event) async {
-            if (event.path == filePath || event.path == ".") {
-              if (event.type == ChangeType.REMOVE) {
-                remove();
-                addToJustRemovedQueue(path);
-                parent.updateList(new Path(path).name);
-                updateList(r"$is");
-                return;
-              }
-
-              if (event.path == ".") {
-                return;
-              }
-            }
-
-            if (!pathlib.isAbsolute(event.path) && event.path.contains("/")) {
-              return;
-            }
-
-            if (event.type == ChangeType.ADD) {
-              FileSystemEntity child = await getFileSystemEntity(
-                pathlib.join(entity.path, event.path)
-              );
-
-              if (child != null) {
-                child = child.absolute;
-                String relative = pathlib.relative(child.path, from: entity.path);
-                if (relative.startsWith(".") && !mount.showHiddenFiles) {
+          if (!Platform.isMacOS) {
+            dirwatch = new DirectoryWatcher(entity.path);
+            dirwatch.events.listen((WatchEvent event) async {
+              if (event.path == filePath || event.path == ".") {
+                if (event.type == ChangeType.REMOVE) {
+                  remove();
+                  addToJustRemovedQueue(path);
+                  parent.updateList(new Path(path).name);
+                  updateList(r"$is");
                   return;
                 }
 
-                String base = pathlib.dirname(relative);
+                if (event.path == ".") {
+                  return;
+                }
+              }
 
+              if (!pathlib.isAbsolute(event.path) && event.path.contains("/")) {
+                return;
+              }
+
+              if (event.type == ChangeType.ADD) {
+                FileSystemEntity child = await getFileSystemEntity(
+                  pathlib.join(entity.path, event.path)
+                );
+
+                if (child != null) {
+                  child = child.absolute;
+                  String relative = pathlib.relative(child.path, from: entity.path);
+                  if (relative.startsWith(".") && !mount.showHiddenFiles) {
+                    return;
+                  }
+
+                  String base = pathlib.dirname(relative);
+
+                  String name = (base == "." ? "" : "${base}/") +
+                    "${NodeNamer.createName(pathlib.basename(relative))}";
+
+                  FileSystemNode node = new FileSystemNode("${path}/${name}");
+                  provider.setNode(node.path, node);
+                }
+              } else if (event.type == ChangeType.REMOVE) {
+                String relative = pathlib.normalize(
+                  pathlib.relative(
+                    pathlib.join(entity.path, event.path),
+                    from: entity.path
+                  )
+                );
+
+                String base = pathlib.dirname(relative);
                 String name = (base == "." ? "" : "${base}/") +
                   "${NodeNamer.createName(pathlib.basename(relative))}";
 
-                FileSystemNode node = new FileSystemNode("${path}/${name}");
-                provider.setNode(node.path, node);
+                provider.removeNode("${path}/${name}");
+                addToJustRemovedQueue("${path}/${name}");
+                updateList(name);
               }
-            } else if (event.type == ChangeType.REMOVE) {
-              String relative = pathlib.normalize(
-                pathlib.relative(
-                  pathlib.join(entity.path, event.path),
-                  from: entity.path
-                )
-              );
+            }, onError: (e) {
+            });
+          } else {
+            fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
+              if (event.path == filePath || event.path == ".") {
+                if (event.type == FileSystemEvent.DELETE) {
+                  remove();
+                  addToJustRemovedQueue(path);
+                  parent.updateList(new Path(path).name);
+                  updateList(r"$is");
+                  return;
+                }
 
-              String base = pathlib.dirname(relative);
-              String name = (base == "." ? "" : "${base}/") +
-                "${NodeNamer.createName(pathlib.basename(relative))}";
+                if (event.path == ".") {
+                  return;
+                }
+              }
 
-              provider.removeNode("${path}/${name}");
-              addToJustRemovedQueue("${path}/${name}");
-              updateList(name);
-            }
-          }, onError: (e) {
-          });
+              if (!pathlib.isAbsolute(event.path) && event.path.contains("/")) {
+                return;
+              }
+
+              if (event.type == FileSystemEvent.CREATE) {
+                FileSystemEntity child = await getFileSystemEntity(
+                  pathlib.join(entity.path, event.path)
+                );
+
+                if (child != null) {
+                  child = child.absolute;
+                  String relative = pathlib.relative(child.path, from: entity.path);
+                  if (relative.startsWith(".") && !mount.showHiddenFiles) {
+                    return;
+                  }
+
+                  String base = pathlib.dirname(relative);
+
+                  String name = (base == "." ? "" : "${base}/") +
+                    "${NodeNamer.createName(pathlib.basename(relative))}";
+
+                  FileSystemNode node = new FileSystemNode("${path}/${name}");
+                  provider.setNode(node.path, node);
+                }
+              } else if (event.type == FileSystemEvent.DELETE) {
+                String relative = pathlib.normalize(
+                  pathlib.relative(
+                    pathlib.join(entity.path, event.path),
+                    from: entity.path
+                  )
+                );
+
+                String base = pathlib.dirname(relative);
+                String name = (base == "." ? "" : "${base}/") +
+                  "${NodeNamer.createName(pathlib.basename(relative))}";
+
+                provider.removeNode("${path}/${name}");
+                addToJustRemovedQueue("${path}/${name}");
+                updateList(name);
+              }
+            });
+          }
 
           fileWatchSub.onDone(() {
             if (dirwatch is ManuallyClosedWatcher) {
@@ -670,8 +736,8 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
     LocalNode parent = provider.getNode(p.parentPath);
 
     int allReferenceCounts = parent is Collectable ?
-    (parent as Collectable).calculateReferences(false) :
-    calculateReferences();
+      (parent as Collectable).calculateReferences(false) :
+      calculateReferences();
 
     if (allReferenceCounts == 0) {
       if (const bool.fromEnvironment("verbose.collect", defaultValue: false)) {
@@ -679,7 +745,9 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
       }
 
       collectChildren();
-      remove();
+      parent.removeChild(p.name);
+      parent.listChangeController.add(p.name);
+      isPopulated = false;
       return;
     }
   }
@@ -691,7 +759,6 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
         (node as Collectable).collect();
       }
     }
-    isPopulated = false;
   }
 
   @override
