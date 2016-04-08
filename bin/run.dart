@@ -529,7 +529,6 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
 
                   FileSystemNode node = new FileSystemNode("${path}/${name}");
                   provider.setNode(node.path, node);
-                  node.populate();
                 }
               } else if (event.type == ChangeType.REMOVE) {
                 String relative = pathlib.normalize(
@@ -588,7 +587,6 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
 
                   FileSystemNode node = new FileSystemNode("${path}/${name}");
                   provider.setNode(node.path, node);
-                  node.populate();
                 }
               } else if (event.type == FileSystemEvent.DELETE) {
                 String relative = pathlib.normalize(
