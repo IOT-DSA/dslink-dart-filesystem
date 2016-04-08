@@ -453,7 +453,11 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
       _onPopulated.add((_) {
         c.complete();
       });
-      await c.future;
+
+      await c.future.timeout(const Duration(seconds: 3), onTimeout: () {
+        _isPopulating = false;
+        return populate();
+      });
       return;
     }
 
