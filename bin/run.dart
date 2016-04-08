@@ -440,16 +440,31 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
     p = new Path(path);
   }
 
+  List<Function> _onPopulated = [];
+  bool _isPopulating = false;
+
   populate() async {
     if (isPopulated) {
       return;
     }
+
+    if (_isPopulating) {
+      var c = new Completer();
+      _onPopulated.add((_) {
+        c.complete();
+      });
+      await c.future;
+      return;
+    }
+
+    _isPopulating = true;
 
     var mountPath = path.split("/").take(2).join("/");
 
     mount = link.getNode(mountPath);
 
     if (mount is! MountNode) {
+      _isPopulating = false;
       throw new Exception("Mount not found.");
     }
 
@@ -459,12 +474,14 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
 
     if (entity == null) {
       remove();
+      _isPopulating = false;
       return;
     }
 
     // Entity does not exist. Mark us as not populated to re-verify.
     if (!(await entity.exists())) {
       isPopulated = false;
+      _isPopulating = false;
       remove();
       return;
     }
@@ -725,6 +742,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
       }
     }
 
+    _isPopulating = false;
     isPopulated = true;
   }
 
@@ -776,6 +794,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
   @override
   onRemoving() {
     super.onRemoving();
+    _isPopulating = false;
     if (fileWatchSub != null) {
       fileWatchSub.cancel();
     }
