@@ -24,6 +24,9 @@ class ReferenceType {
   final String name;
 
   const ReferenceType(this.name);
+
+  @override
+  String toString() => name;
 }
 
 Directory currentDir;
