@@ -41,6 +41,7 @@ main(List<String> args) async {
     "directoryMakeFile": (String path) => new DirectoryMakeFileNode(path),
     "fileDelete": (String path) => new FileDeleteNode(path),
     "fileLength": (String path) => new FileLengthNode(path),
+    "fileMove": (String path) => new FileMoveNode(path),
     "readBinaryChunk": (String path) => new FileReadBinaryChunkNode(path),
     "publish": (String path) => new PublishFileNode(path)
   }, nodes: {
@@ -754,7 +755,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
 
   @override
   void collectChildren() {
-    for (LocalNode node in children.values.toList()) {
+    for (SimpleNode node in children.values.toList()) {
       if (node is Collectable) {
         (node as Collectable).collect();
       }
