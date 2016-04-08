@@ -1,6 +1,7 @@
 import "package:dslink/dslink.dart";
 import "package:dslink/nodes.dart";
 import "package:dslink/io.dart";
+import "package:dslink/utils.dart";
 
 import "dart:async";
 import "dart:convert";
@@ -550,7 +551,8 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
                 addToJustRemovedQueue("${path}/${name}");
                 updateList(name);
               }
-            }, onError: (e) {
+            }, onError: (e, stack) {
+              logger.warning("Failed to watch ${filePath}.", e, stack);
             });
           } else {
             fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
@@ -609,6 +611,8 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
                 addToJustRemovedQueue("${path}/${name}");
                 updateList(name);
               }
+            }, onError: (e, stack) {
+              logger.warning("Failed to watch ${filePath}.", e, stack);
             });
           }
 
@@ -649,6 +653,8 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
               await lengthNode.loadValue();
             }
           }
+        }, onError: (e, stack) {
+          logger.warning("Failed to watch ${filePath}.", e, stack);
         });
 
         fileWatchSub.onDone(() {
