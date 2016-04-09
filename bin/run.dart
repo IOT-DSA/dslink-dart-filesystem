@@ -517,6 +517,8 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
         return;
       }
 
+      Map<String, Map> childQueue = {};
+
       try {
         if (entity is Directory) {
           await for (FileSystemEntity child in (entity as Directory).list()) {
@@ -665,13 +667,13 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
           } catch (e) {
           }
 
-          link.addNode("${path}/_@mkdir", {
+          childQueue["_@mkdir"] = {
             r"$is": "directoryMakeDirectory"
-          });
+          };
 
-          link.addNode("${path}/_@mkfile", {
+          childQueue["_@mkfile"] = {
             r"$is": "directoryMakeFile"
-          });
+          };
         } else if (entity is File) {
           var watcher = new FileWatcher(entity.path);
           fileWatchSub = watcher.events.listen((WatchEvent event) async {
@@ -704,31 +706,33 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
             }
           });
 
-          link.addNode("${path}/_@content", {
+          childQueue["_@content"] = {
             r"$is": "fileContent",
             r"$name": "Content",
             r"$type": "string"
-          });
+          };
 
-          link.addNode("${path}/_@readBinaryChunk", {
-            r"$is": "readBinaryChunk"
-          });
+          childQueue["_@readBinaryChunk"] = {
+            r"$is": "readBinaryChunk",
+            r"$invokable": "read"
+          };
 
-          link.addNode("${path}/_@modified", {
-            r"$is": "fileModified",
-            r"$name": "Last Modified",
-            r"$type": "string"
-          });
-
-          link.addNode("${path}/_@length", {
+          childQueue["_@length"] = {
             r"$is": "fileLength",
             r"$name": "Size",
             r"$type": "string"
-          });
+          };
+
+          childQueue["_@modified"] = {
+            r"$is": "fileModified",
+            r"$name": "Last Modified",
+            r"$type": "string"
+          };
         }
 
         link.addNode("${path}/_@delete", {
           r"$is": "fileDelete",
+          r"$invokable": "write",
           r"$params": [
             {
               "name": "areYouSure",
@@ -738,8 +742,21 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
           ]
         });
 
-        link.addNode("${path}/_@move", {
+        childQueue["_@delete"] = {
+          r"$is": "fileDelete",
+          r"$invokable": "write",
+          r"$params": [
+            {
+              "name": "areYouSure",
+              "type": "bool",
+              "default": false
+            }
+          ]
+        };
+
+        childQueue["_@move"] =  {
           r"$is": "fileMove",
+          r"$invokable": "write",
           r"$params": [
             {
               "name": "target",
@@ -747,7 +764,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
               "placeholder": "file.txt"
             }
           ]
-        });
+        };
       } catch (e) {
         var err = e;
         if (!children.containsKey("_@error")) {
@@ -766,11 +783,18 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
         }
       }
 
-      done();
-      isPopulated = true;
       if (!provider.hasNode(path)) {
         provider.setNode(path, this);
       }
+
+      for (String key in childQueue.keys) {
+        link.addNode("${path}/${key}", childQueue[key]);
+      }
+
+      childQueue.clear();
+
+      done();
+      isPopulated = true;
     });
   }
 
