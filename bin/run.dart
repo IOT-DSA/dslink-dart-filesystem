@@ -138,6 +138,8 @@ main(List<String> args) async {
       node = new FileMoveNode(path);
     } else if (name == "_@readBinaryChunk") {
       node = new FileReadBinaryChunkNode(path);
+    } else if (name == ".") {
+      node = null;
     } else {
       if (justRemovedPaths.contains(path)) {
         return null;
@@ -1336,7 +1338,7 @@ class PublishFileNode extends SimpleNode {
 
     path = pathlib.join(mount.filePath, path);
 
-    File file = new File(path);
+    File file = new File(path).absolute;
     if (!(await file.exists())) {
       await file.create(recursive: true);
     }
@@ -1345,6 +1347,27 @@ class PublishFileNode extends SimpleNode {
       await file.writeAsBytes(content.buffer.asUint8List());
     } else {
       await file.writeAsString(content.toString());
+    }
+
+    if (pathlib.isWithin(mount.filePath, file.path)) {
+      String mpart = pathlib.posix.normalize(
+        pathlib.relative(file.path, from: mount.filePath)
+      );
+
+      String base = pathlib.dirname(mpart);
+
+      String name = (base == "." ? "" : "${base}/") +
+        "${NodeNamer.createName(pathlib.basename(mpart))}";
+
+      String fp = "${mount.path}/";
+
+      if (base != ".") {
+        fp += "${base}/";
+      }
+
+      fp += name;
+      FileSystemNode node = new FileSystemNode(fp);
+      await node.populate();
     }
   }
 }
