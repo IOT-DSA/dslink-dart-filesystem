@@ -272,7 +272,7 @@ class AddMountNode extends SimpleNode {
 }
 
 class MountNode extends FileSystemNode {
-  int get maxContentSize => 4 * 1024 * 1024;
+  int get maxContentSize => 64 * 1024 * 1024;
   String get directory => attributes["@directory"];
   bool get showHiddenFiles => attributes["@showHiddenFiles"] == true;
 
