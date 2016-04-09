@@ -458,7 +458,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
       logger.fine("Waiting for existing population task on ${path}");
 
       var c = new Completer();
-      _onPopulated.add((_) {
+      _onPopulated.add(() {
         c.complete();
       });
 
