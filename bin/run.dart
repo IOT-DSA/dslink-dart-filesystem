@@ -203,11 +203,13 @@ main(List<String> args) async {
           LocalNode node = provider.nodes[key];
           if (node is ReferencedNode) {
             print("${node.path}: ${node.references.map((x) => x
-                .toString()
-                .split(".")
-                .last).toList()}");
+              .toString()
+              .split(".")
+              .last).toList()}");
           }
         }
+      } else if (line == "show-populate-queue") {
+        print(FileSystemNode.POP_QUEUE);
       } else if (line == "node-types") {
         for (String key in provider.nodes.keys) {
           LocalNode node = provider.nodes[key];
@@ -430,6 +432,8 @@ abstract class ReferencedNode extends SimpleNode implements Collectable {
 }
 
 class FileSystemNode extends ReferencedNode implements WaitForMe {
+  static List<String> POP_QUEUE = [];
+
   Path p;
   MountNode mount;
   String filePath;
@@ -443,318 +447,331 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
   List<Function> _onPopulated = [];
   bool _isPopulating = false;
 
-  populate() async {
+  populate() {
     if (isPopulated) {
-      return;
+      return new Future.value();
     }
 
+    logger.fine("Populating ${path}");
+
     if (_isPopulating) {
+      logger.fine("Waiting for existing population task on ${path}");
+
       var c = new Completer();
       _onPopulated.add((_) {
         c.complete();
       });
 
-      await c.future.timeout(const Duration(seconds: 3), onTimeout: () {
+      return c.future.timeout(const Duration(seconds: 3), onTimeout: () {
         _isPopulating = false;
+        logger.fine("Waiting timed out for ${path}, retrying a populate.");
         return populate();
       });
-      return;
     }
 
     _isPopulating = true;
+    if (!POP_QUEUE.contains(path)) {
+      POP_QUEUE.add(path);
+    }
 
     void done() {
       _isPopulating = false;
+      POP_QUEUE.remove(path);
+
       while (_onPopulated.isNotEmpty) {
         _onPopulated.removeAt(0)();
       }
+
+      logger.fine("${path} is now populated");
     }
 
-    var mountPath = path.split("/").take(2).join("/");
+    return new Future(() async {
+      var mountPath = path.split("/").take(2).join("/");
 
-    mount = link.getNode(mountPath);
+      mount = link.getNode(mountPath);
 
-    if (mount is! MountNode) {
-      done();
-      throw new Exception("Mount not found.");
-    }
+      if (mount is! MountNode) {
+        done();
+        throw new Exception("Mount not found.");
+      }
 
-    filePath = mount.resolveChildFilePath(path);
+      filePath = mount.resolveChildFilePath(path);
 
-    entity = await getFileSystemEntity(filePath);
+      entity = await getFileSystemEntity(filePath);
 
-    if (entity == null) {
-      remove();
-      done();
-      return;
-    }
+      if (entity == null) {
+        remove();
+        done();
+        return;
+      }
 
-    // Entity does not exist. Mark us as not populated to re-verify.
-    if (!(await entity.exists())) {
-      isPopulated = false;
-      done();
-      remove();
-      return;
-    }
+      // Entity does not exist. Mark us as not populated to re-verify.
+      if (!(await entity.exists())) {
+        isPopulated = false;
+        done();
+        remove();
+        return;
+      }
 
-    if (!provider.hasNode(path)) {
-      provider.setNode(path, this);
-    }
+      if (!provider.hasNode(path)) {
+        provider.setNode(path, this);
+      }
 
-    try {
-      if (entity is Directory) {
-        await for (FileSystemEntity child in (entity as Directory).list()) {
-          String relative = pathlib.relative(child.path, from: entity.path);
-          if (relative.startsWith(".") && !mount.showHiddenFiles) {
-            continue;
+      try {
+        if (entity is Directory) {
+          await for (FileSystemEntity child in (entity as Directory).list()) {
+            String relative = pathlib.relative(child.path, from: entity.path);
+            if (relative.startsWith(".") && !mount.showHiddenFiles) {
+              continue;
+            }
+            String name = NodeNamer.createName(relative);
+            FileSystemNode node = new FileSystemNode("${path}/${name}");
+            if (!provider.hasNode(node.path)) {
+              provider.setNode(node.path, node);
+              node.populate();
+            }
           }
-          String name = NodeNamer.createName(relative);
-          FileSystemNode node = new FileSystemNode("${path}/${name}");
-          if (!provider.hasNode(node.path)) {
-            provider.setNode(node.path, node);
-            node.populate();
+
+          if (fileWatchSub != null) {
+            fileWatchSub.cancel();
           }
-        }
 
-        if (fileWatchSub != null) {
-          fileWatchSub.cancel();
-        }
-
-        try {
-          if (!Platform.isMacOS) {
-            dirwatch = new DirectoryWatcher(entity.path);
-            dirwatch.events.listen((WatchEvent event) async {
-              if (event.path == filePath || event.path == ".") {
-                if (event.type == ChangeType.REMOVE) {
-                  remove();
-                  addToJustRemovedQueue(path);
-                  parent.updateList(new Path(path).name);
-                  updateList(r"$is");
-                  return;
-                }
-
-                if (event.path == ".") {
-                  return;
-                }
-              }
-
-              if (!pathlib.isAbsolute(event.path) && event.path.contains("/")) {
-                return;
-              }
-
-              if (event.type == ChangeType.ADD) {
-                FileSystemEntity child = await getFileSystemEntity(
-                  pathlib.join(entity.path, event.path)
-                );
-
-                if (child != null) {
-                  child = child.absolute;
-                  String relative = pathlib.relative(child.path, from: entity.path);
-                  if (relative.startsWith(".") && !mount.showHiddenFiles) {
+          try {
+            if (!Platform.isMacOS) {
+              dirwatch = new DirectoryWatcher(entity.path);
+              dirwatch.events.listen((WatchEvent event) async {
+                if (event.path == filePath || event.path == ".") {
+                  if (event.type == ChangeType.REMOVE) {
+                    remove();
+                    addToJustRemovedQueue(path);
+                    parent.updateList(new Path(path).name);
+                    updateList(r"$is");
                     return;
                   }
 
-                  String base = pathlib.dirname(relative);
+                  if (event.path == ".") {
+                    return;
+                  }
+                }
 
+                if (!pathlib.isAbsolute(event.path) && event.path.contains("/")) {
+                  return;
+                }
+
+                if (event.type == ChangeType.ADD) {
+                  FileSystemEntity child = await getFileSystemEntity(
+                    pathlib.join(entity.path, event.path)
+                  );
+
+                  if (child != null) {
+                    child = child.absolute;
+                    String relative = pathlib.relative(child.path, from: entity.path);
+                    if (relative.startsWith(".") && !mount.showHiddenFiles) {
+                      return;
+                    }
+
+                    String base = pathlib.dirname(relative);
+
+                    String name = (base == "." ? "" : "${base}/") +
+                      "${NodeNamer.createName(pathlib.basename(relative))}";
+
+                    FileSystemNode node = new FileSystemNode("${path}/${name}");
+                    provider.setNode(node.path, node);
+                    node.populate();
+                  }
+                } else if (event.type == ChangeType.REMOVE) {
+                  String relative = pathlib.normalize(
+                    pathlib.relative(
+                      pathlib.join(entity.path, event.path),
+                      from: entity.path
+                    )
+                  );
+
+                  String base = pathlib.dirname(relative);
                   String name = (base == "." ? "" : "${base}/") +
                     "${NodeNamer.createName(pathlib.basename(relative))}";
 
-                  FileSystemNode node = new FileSystemNode("${path}/${name}");
-                  provider.setNode(node.path, node);
-                  node.populate();
+                  provider.removeNode("${path}/${name}");
+                  addToJustRemovedQueue("${path}/${name}");
+                  updateList(name);
                 }
-              } else if (event.type == ChangeType.REMOVE) {
-                String relative = pathlib.normalize(
-                  pathlib.relative(
-                    pathlib.join(entity.path, event.path),
-                    from: entity.path
-                  )
-                );
-
-                String base = pathlib.dirname(relative);
-                String name = (base == "." ? "" : "${base}/") +
-                  "${NodeNamer.createName(pathlib.basename(relative))}";
-
-                provider.removeNode("${path}/${name}");
-                addToJustRemovedQueue("${path}/${name}");
-                updateList(name);
-              }
-            }, onError: (e, stack) {
-              logger.warning("Failed to watch ${filePath}.", e, stack);
-            });
-          } else {
-            fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
-              if (event.path == filePath || event.path == ".") {
-                if (event.type == FileSystemEvent.DELETE) {
-                  remove();
-                  addToJustRemovedQueue(path);
-                  parent.updateList(new Path(path).name);
-                  updateList(r"$is");
-                  return;
-                }
-
-                if (event.path == ".") {
-                  return;
-                }
-              }
-
-              if (!pathlib.isAbsolute(event.path) && event.path.contains("/")) {
-                return;
-              }
-
-              if (event.type == FileSystemEvent.CREATE) {
-                FileSystemEntity child = await getFileSystemEntity(
-                  pathlib.join(entity.path, event.path)
-                );
-
-                if (child != null) {
-                  child = child.absolute;
-                  String relative = pathlib.relative(child.path, from: entity.path);
-                  if (relative.startsWith(".") && !mount.showHiddenFiles) {
+              }, onError: (e, stack) {
+                logger.warning("Failed to watch ${filePath}.", e, stack);
+              });
+            } else {
+              fileWatchSub = entity.watch().listen((FileSystemEvent event) async {
+                if (event.path == filePath || event.path == ".") {
+                  if (event.type == FileSystemEvent.DELETE) {
+                    remove();
+                    addToJustRemovedQueue(path);
+                    parent.updateList(new Path(path).name);
+                    updateList(r"$is");
                     return;
                   }
 
-                  String base = pathlib.dirname(relative);
+                  if (event.path == ".") {
+                    return;
+                  }
+                }
 
+                if (!pathlib.isAbsolute(event.path) && event.path.contains("/")) {
+                  return;
+                }
+
+                if (event.type == FileSystemEvent.CREATE) {
+                  FileSystemEntity child = await getFileSystemEntity(
+                    pathlib.join(entity.path, event.path)
+                  );
+
+                  if (child != null) {
+                    child = child.absolute;
+                    String relative = pathlib.relative(child.path, from: entity.path);
+                    if (relative.startsWith(".") && !mount.showHiddenFiles) {
+                      return;
+                    }
+
+                    String base = pathlib.dirname(relative);
+
+                    String name = (base == "." ? "" : "${base}/") +
+                      "${NodeNamer.createName(pathlib.basename(relative))}";
+
+                    FileSystemNode node = new FileSystemNode("${path}/${name}");
+                    provider.setNode(node.path, node);
+                    node.populate();
+                  }
+                } else if (event.type == FileSystemEvent.DELETE) {
+                  String relative = pathlib.normalize(
+                    pathlib.relative(
+                      pathlib.join(entity.path, event.path),
+                      from: entity.path
+                    )
+                  );
+
+                  String base = pathlib.dirname(relative);
                   String name = (base == "." ? "" : "${base}/") +
                     "${NodeNamer.createName(pathlib.basename(relative))}";
 
-                  FileSystemNode node = new FileSystemNode("${path}/${name}");
-                  provider.setNode(node.path, node);
-                  node.populate();
+                  provider.removeNode("${path}/${name}");
+                  addToJustRemovedQueue("${path}/${name}");
+                  updateList(name);
                 }
-              } else if (event.type == FileSystemEvent.DELETE) {
-                String relative = pathlib.normalize(
-                  pathlib.relative(
-                    pathlib.join(entity.path, event.path),
-                    from: entity.path
-                  )
-                );
+              }, onError: (e, stack) {
+                logger.warning("Failed to watch ${filePath}.", e, stack);
+              });
+            }
 
-                String base = pathlib.dirname(relative);
-                String name = (base == "." ? "" : "${base}/") +
-                  "${NodeNamer.createName(pathlib.basename(relative))}";
-
-                provider.removeNode("${path}/${name}");
-                addToJustRemovedQueue("${path}/${name}");
-                updateList(name);
+            fileWatchSub.onDone(() {
+              if (dirwatch is ManuallyClosedWatcher) {
+                (dirwatch as ManuallyClosedWatcher).close();
               }
-            }, onError: (e, stack) {
-              logger.warning("Failed to watch ${filePath}.", e, stack);
             });
+          } catch (e) {
           }
+
+          link.addNode("${path}/_@mkdir", {
+            r"$is": "directoryMakeDirectory"
+          });
+
+          link.addNode("${path}/_@mkfile", {
+            r"$is": "directoryMakeFile"
+          });
+        } else if (entity is File) {
+          var watcher = new FileWatcher(entity.path);
+          fileWatchSub = watcher.events.listen((WatchEvent event) async {
+            if (event.type == ChangeType.REMOVE) {
+              remove();
+              return;
+            } else if (event.type == ChangeType.MODIFY) {
+              FileContentNode contentNode = children["_@content"];
+              if (contentNode != null) {
+                await contentNode.loadValue();
+              }
+
+              FileLastModifiedNode modifiedNode = children["_@modified"];
+              if (modifiedNode != null) {
+                await modifiedNode.loadValue();
+              }
+
+              FileLengthNode lengthNode = children["_@length"];
+              if (lengthNode != null) {
+                await lengthNode.loadValue();
+              }
+            }
+          }, onError: (e, stack) {
+            logger.warning("Failed to watch ${filePath}.", e, stack);
+          });
 
           fileWatchSub.onDone(() {
-            if (dirwatch is ManuallyClosedWatcher) {
-              (dirwatch as ManuallyClosedWatcher).close();
+            if (watcher is ManuallyClosedWatcher) {
+              (watcher as ManuallyClosedWatcher).close();
             }
           });
-        } catch (e) {
+
+          link.addNode("${path}/_@content", {
+            r"$is": "fileContent",
+            r"$name": "Content",
+            r"$type": "string"
+          });
+
+          link.addNode("${path}/_@readBinaryChunk", {
+            r"$is": "readBinaryChunk"
+          });
+
+          link.addNode("${path}/_@modified", {
+            r"$is": "fileModified",
+            r"$name": "Last Modified",
+            r"$type": "string"
+          });
+
+          link.addNode("${path}/_@length", {
+            r"$is": "fileLength",
+            r"$name": "Size",
+            r"$type": "string"
+          });
         }
 
-        link.addNode("${path}/_@mkdir", {
-          r"$is": "directoryMakeDirectory"
-        });
-
-        link.addNode("${path}/_@mkfile", {
-          r"$is": "directoryMakeFile"
-        });
-      } else if (entity is File) {
-        var watcher = new FileWatcher(entity.path);
-        fileWatchSub = watcher.events.listen((WatchEvent event) async {
-          if (event.type == ChangeType.REMOVE) {
-            remove();
-            return;
-          } else if (event.type == ChangeType.MODIFY) {
-            FileContentNode contentNode = children["_@content"];
-            if (contentNode != null) {
-              await contentNode.loadValue();
+        link.addNode("${path}/_@delete", {
+          r"$is": "fileDelete",
+          r"$params": [
+            {
+              "name": "areYouSure",
+              "type": "bool",
+              "default": false
             }
+          ]
+        });
 
-            FileLastModifiedNode modifiedNode = children["_@modified"];
-            if (modifiedNode != null) {
-              await modifiedNode.loadValue();
+        link.addNode("${path}/_@move", {
+          r"$is": "fileMove",
+          r"$params": [
+            {
+              "name": "target",
+              "type": "string",
+              "placeholder": "file.txt"
             }
-
-            FileLengthNode lengthNode = children["_@length"];
-            if (lengthNode != null) {
-              await lengthNode.loadValue();
-            }
-          }
-        }, onError: (e, stack) {
-          logger.warning("Failed to watch ${filePath}.", e, stack);
+          ]
         });
+      } catch (e) {
+        var err = e;
+        if (!children.containsKey("_@error")) {
+          link.addNode("${path}/_@error", {
+            r"$name": "Error",
+            r"$type": "string"
+          });
+        }
 
-        fileWatchSub.onDone(() {
-          if (watcher is ManuallyClosedWatcher) {
-            (watcher as ManuallyClosedWatcher).close();
-          }
-        });
+        if (err is FileSystemException) {
+          err = err.message + " (path: ${err.path})${err.osError != null ? ' (OS error: ${err.osError})' : ''}";
+        }
 
-        link.addNode("${path}/_@content", {
-          r"$is": "fileContent",
-          r"$name": "Content",
-          r"$type": "string"
-        });
-
-        link.addNode("${path}/_@readBinaryChunk", {
-          r"$is": "readBinaryChunk"
-        });
-
-        link.addNode("${path}/_@modified", {
-          r"$is": "fileModified",
-          r"$name": "Last Modified",
-          r"$type": "string"
-        });
-
-        link.addNode("${path}/_@length", {
-          r"$is": "fileLength",
-          r"$name": "Size",
-          r"$type": "string"
-        });
+        if (children["_@error"] != null) {
+          (children["_@error"] as SimpleNode).updateValue(err.toString());
+        }
       }
 
-      link.addNode("${path}/_@delete", {
-        r"$is": "fileDelete",
-        r"$params": [
-          {
-            "name": "areYouSure",
-            "type": "bool",
-            "default": false
-          }
-        ]
-      });
-
-      link.addNode("${path}/_@move", {
-        r"$is": "fileMove",
-        r"$params": [
-          {
-            "name": "target",
-            "type": "string",
-            "placeholder": "file.txt"
-          }
-        ]
-      });
-    } catch (e) {
-      var err = e;
-      if (!children.containsKey("_@error")) {
-        link.addNode("${path}/_@error", {
-          r"$name": "Error",
-          r"$type": "string"
-        });
-      }
-
-      if (err is FileSystemException) {
-        err = err.message + " (path: ${err.path})${err.osError != null ? ' (OS error: ${err.osError})' : ''}";
-      }
-
-      if (children["_@error"] != null) {
-        (children["_@error"] as SimpleNode).updateValue(err.toString());
-      }
-    }
-
-    done();
-    isPopulated = true;
+      done();
+      isPopulated = true;
+    });
   }
 
   bool isPopulated = false;
