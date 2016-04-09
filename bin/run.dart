@@ -323,8 +323,11 @@ class MountNode extends FileSystemNode {
 
   @override
   void collect() { // Don't collect the mount nodes.
-    collectChildren();
-    findStrayNodesAndCollect();
+    var refs = calculateReferences();
+    if (refs == 0) {
+      collectChildren();
+      findStrayNodesAndCollect();
+    }
   }
 
   void findStrayNodesAndCollect() {
