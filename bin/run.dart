@@ -442,6 +442,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
 
   FileSystemNode(String path) : super(path) {
     p = new Path(path);
+    attributes["@file"] = true;
   }
 
   List<Function> _onPopulated = [];
