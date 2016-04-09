@@ -447,7 +447,7 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
   List<Function> _onPopulated = [];
   bool _isPopulating = false;
 
-  populate() {
+  Future populate() {
     if (isPopulated) {
       return new Future.value();
     }
@@ -513,10 +513,6 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
         return;
       }
 
-      if (!provider.hasNode(path)) {
-        provider.setNode(path, this);
-      }
-
       try {
         if (entity is Directory) {
           await for (FileSystemEntity child in (entity as Directory).list()) {
@@ -527,7 +523,6 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
             String name = NodeNamer.createName(relative);
             FileSystemNode node = new FileSystemNode("${path}/${name}");
             if (!provider.hasNode(node.path)) {
-              provider.setNode(node.path, node);
               node.populate();
             }
           }
@@ -576,7 +571,6 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
                       "${NodeNamer.createName(pathlib.basename(relative))}";
 
                     FileSystemNode node = new FileSystemNode("${path}/${name}");
-                    provider.setNode(node.path, node);
                     node.populate();
                   }
                 } else if (event.type == ChangeType.REMOVE) {
@@ -636,7 +630,6 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
                       "${NodeNamer.createName(pathlib.basename(relative))}";
 
                     FileSystemNode node = new FileSystemNode("${path}/${name}");
-                    provider.setNode(node.path, node);
                     node.populate();
                   }
                 } else if (event.type == FileSystemEvent.DELETE) {
@@ -771,6 +764,9 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
 
       done();
       isPopulated = true;
+      if (!provider.hasNode(path)) {
+        provider.setNode(path, this);
+      }
     });
   }
 
