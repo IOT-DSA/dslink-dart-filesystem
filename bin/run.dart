@@ -732,18 +732,6 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
           };
         }
 
-        link.addNode("${path}/_@delete", {
-          r"$is": "fileDelete",
-          r"$invokable": "write",
-          r"$params": [
-            {
-              "name": "areYouSure",
-              "type": "bool",
-              "default": false
-            }
-          ]
-        });
-
         childQueue["_@delete"] = {
           r"$is": "fileDelete",
           r"$invokable": "write",
