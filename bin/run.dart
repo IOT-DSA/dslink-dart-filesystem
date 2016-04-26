@@ -103,6 +103,11 @@ main(List<String> args) async {
         "name": "showHiddenFiles",
         "type": "bool",
         "description": "Show Hidden Files"
+      },
+      {
+        "name": "forceFilePolling",
+        "type": "bool",
+        "description": "Force File Polling"
       }
     ],
     r"$is": "addMount"
@@ -241,6 +246,7 @@ class AddMountNode extends SimpleNode {
     var name = params["name"];
     var p = params["directory"];
     var showHiddenFiles = params["showHiddenFiles"];
+    var usePollingOnly = params["forceFilePolling"];
 
     if (name == null) {
       throw new Exception("Name for mount was not provided.");
@@ -266,7 +272,8 @@ class AddMountNode extends SimpleNode {
       r"$is": "mount",
       r"$name": name,
       "@directory": dir.path,
-      "@showHiddenFiles": showHiddenFiles
+      "@showHiddenFiles": showHiddenFiles,
+      "@filePollOnly": usePollingOnly
     });
 
     link.save();
@@ -276,6 +283,7 @@ class AddMountNode extends SimpleNode {
 class MountNode extends FileSystemNode {
   int get maxContentSize => 64 * 1024 * 1024;
   String get directory => attributes["@directory"];
+  bool get isPollOnly => attributes["@filePollOnly"] == true;
   bool get showHiddenFiles => attributes["@showHiddenFiles"] == true;
 
   MountNode(String path) : super(path) {
@@ -349,7 +357,8 @@ class MountNode extends FileSystemNode {
       r"$is": "mount",
       r"$name": configs[r"$name"],
       "@directory": attributes["@directory"],
-      "@showHiddenFiles": attributes["@showHiddenFiles"]
+      "@showHiddenFiles": attributes["@showHiddenFiles"],
+      "@filePollOnly": attributes["@filePollOnly"]
     };
   }
 
@@ -541,7 +550,9 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
 
           try {
             if (!Platform.isMacOS) {
-              dirwatch = new DirectoryWatcher(entity.path);
+              dirwatch = mount.isPollOnly
+                ? new PollingDirectoryWatcher(entity.path)
+                : new DirectoryWatcher(entity.path);
               dirwatch.events.listen((WatchEvent event) async {
                 if (event.path == filePath || event.path == ".") {
                   if (event.type == ChangeType.REMOVE) {
@@ -677,19 +688,18 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
             r"$is": "directoryMakeFile"
           };
         } else if (entity is File) {
-          var watcher = new FileWatcher(entity.path);
+          var watcher = mount.isPollOnly
+            ? new PollingFileWatcher(entity.path)
+            : new FileWatcher(entity.path);
           fileWatchSub = watcher.events.listen((WatchEvent event) async {
-            if (event.type == ChangeType.REMOVE) {
-              remove();
-              return;
-            } else if (event.type == ChangeType.MODIFY) {
+            if (event.type == ChangeType.MODIFY) {
               FileContentNode contentNode = children["_@content"];
-              if (contentNode != null) {
+              if (contentNode != null && contentNode.hasSubscriber) {
                 await contentNode.loadValue();
               }
 
               FileLastModifiedNode modifiedNode = children["_@modified"];
-              if (modifiedNode != null) {
+              if (modifiedNode != null && modifiedNode.hasSubscriber) {
                 await modifiedNode.loadValue();
               }
 
