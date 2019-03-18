@@ -1,6 +1,6 @@
 {
   "name": "dslink-dart-filesystem",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "FileSystem DSLink",
   "main": "bin/run.dart",
   "engines": {
