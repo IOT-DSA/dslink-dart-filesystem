@@ -788,7 +788,10 @@ class FileSystemNode extends ReferencedNode implements WaitForMe {
       }
 
       for (String key in childQueue.keys) {
-        link.addNode("${path}/${key}", childQueue[key]);
+        String childPath = "${path}/${key}";
+        if (link.getNode(childPath) == null) {
+          link.addNode("${path}/${key}", childQueue[key]);
+        }
       }
 
       childQueue.clear();
